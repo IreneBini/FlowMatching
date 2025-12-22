@@ -22,9 +22,13 @@ KEY COMPONENTS:
    - Generates 100,000 samples and visualizes the evolution of the 
      distribution over time-steps.
 
-USAGE:
-Run via CLI with optional arguments:
-    python <script_name>.py --name "experiment_name" --variable_lr
+USAGE EXAMPLE:
+    - Use Gaussian source distribution with clamping:
+        - python deltaphi_test.py --name gaus --source_dist gaussian --clamp 
+    - Use Uniform source distribution with variable learning rate:
+        - python deltaphi_test.py --name uniform_varLR --source_dist uniform --variable_lr
+    - Resume training from a specific checkpoint:
+        - python deltaphi_test.py --resume "checkpoints/epoch_500/model_epoch_500.pth"
 
 OUTPUTS:
 - Checkpoints (.pth) saved in experiment-specific folders.
@@ -193,7 +197,7 @@ def create_experiment_summary(checkpoint_dir, name, args, dphi, total_params, hi
     summary_path = os.path.join(checkpoint_dir, "experiment_summary.txt")
     with open(summary_path, "w") as f:
         f.write("EXPERIMENT SUMMARY\n")
-        f.write("==================\n")
+        f.write("=" * 20 + "\n")
         f.write(f"Date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"Experiment Name: {name}\n")
         f.write("-" * 20 + "\n")
@@ -215,31 +219,36 @@ def create_experiment_summary(checkpoint_dir, name, args, dphi, total_params, hi
             f.write("Source Range:        [-3.0, 3.0]\n")
         else:
             f.write("Source Params:       Mean=0, Std=1\n")
+        if args.clamp:
+            f.write("Clamping:            Enabled [-3.0, 3.0]\n")
         f.write("Path Type:           AffineProbPath\n")
         f.write("Scheduler:           CondOTScheduler (Optimal Transport)\n")
         f.write("-" * 20 + "\n")
         f.write("TRAINING CONFIGURATION:\n")
         f.write(f"Epochs:              {epochs}\n")
         f.write(f"Initial Batch Size:  {bs}\n")
-        f.write("Dynamic Batching:    Full-dataset after epoch 2\n")
+        f.write(f"Dynamic Batching:    Full-dataset after epoch 2\n")
         f.write(f"Optimizer:           Adam (lr={lr})\n")
         f.write(f"LR Strategy:         {'Fixed' if LRfixed else 'StepLR'}\n")
         if not LRfixed:
             f.write(f"Scheduler Params:    StepSize={step_size}, Gamma={gamma}\n")
-        f.write("-" * 48 + "\n")
+        f.write("-" * 20 + "\n")
         f.write("EVALUATION CONFIG (In-Training):\n")
         f.write("ODE Solver:          dopri5\n")
-        f.write("Eval Samples:        50,000\n")
-        f.write("==================\n")
+        f.write("Eval Samples:        50000\n")
+        f.write("=" * 20 + "\n")
 
     print(f"--- Summary file created at: {summary_path} ---")   
 
 global_start_time = time.time()
+start_time = time.time()
 
 parser = argparse.ArgumentParser(description="Training Flow Matching per dphi")
 parser.add_argument("--name", type=str, default="t_uniform", help="Nome dell'esperimento/cartella")
 parser.add_argument("--variable_lr", action="store_true", help="Se presente, usa il learning rate variabile (default: Fixed)")
 parser.add_argument("--source_dist", type=str, default="uniform", choices=["uniform", "gaussian"], help="Distribuzione sorgente: 'uniform' o 'gaussian'")
+parser.add_argument("--clamp", action="store_true", help="Se presente, clampa i campioni della distribuzione uniforme nell'intervallo [-3, 3]")
+parser.add_argument("--resume", type=str, default=None, help="Percorso del file .pth per riprendere il training")
 
 args = parser.parse_args()
 
@@ -267,6 +276,7 @@ num_layers = 6
 vf4 = MLP(input_dim=1, time_dim=1, hidden_dim=hidden_dim, num_layers=num_layers).to(device)
 path = AffineProbPath(scheduler=CondOTScheduler())
 optim4 = torch.optim.Adam(vf4.parameters(), lr=lr)
+losses_exp4 = []
 
 if LRfixed:
     print("Using fixed learning rate.")
@@ -276,6 +286,25 @@ else:
     step_size = 100 # LR decrease every 100 epochs
     gamma = 0.5 # LR decrease factor
     scheduler = torch.optim.lr_scheduler.StepLR(optim4, step_size=step_size, gamma=gamma)
+
+# Resume from checkpoint if specified
+start_epoch = 0
+if args.resume and os.path.isfile(args.resume):
+    print(f"--- Loading checkpoint: {args.resume} ---")
+    checkpoint = torch.load(args.resume, map_location=device)
+    
+    vf4.load_state_dict(checkpoint['model_state_dict'])
+    optim4.load_state_dict(checkpoint['optimizer_state_dict'])
+    start_epoch = checkpoint['epoch'] + 1 # Riprendiamo dall'epoca successiva
+    
+    if 'loss_history' in checkpoint:
+        losses_exp4 = checkpoint['loss_history']
+
+    if not LRfixed:
+        for _ in range(start_epoch):
+            scheduler.step()
+            
+    print(f"--- Resuming from epoch {start_epoch} ---")
 
 # print model parameters count
 total_params = sum(p.numel() for p in vf4.parameters())
@@ -290,10 +319,6 @@ elif args.source_dist == "uniform":
 # Create summary file
 create_experiment_summary(checkpoint_dir, name, args, dphi, total_params, hidden_dim, num_layers, epochs, bs, lr, LRfixed, step_size if not LRfixed else None, gamma if not LRfixed else None)
 
-# Training loop
-losses_exp4 = []
-start_time = time.time()
-
 # Create a custom sampler for dphi distribution
 dphi_tensor = torch.from_numpy(dphi).float()
 
@@ -301,11 +326,11 @@ dphi_tensor = torch.from_numpy(dphi).float()
 dataset = torch.utils.data.TensorDataset(dphi_tensor.unsqueeze(1))
 # loader = torch.utils.data.DataLoader(dataset, batch_size=bs, shuffle=True)
 
-for epoch in range(epochs):
-    if epoch == 0:
-        loader = torch.utils.data.DataLoader(dataset, batch_size=bs, shuffle=True)
-    elif epoch == 2:
+for epoch in range(start_epoch, epochs):
+    if epoch >= 2:
         loader = torch.utils.data.DataLoader(dataset, batch_size=len(dataset), shuffle=True)
+    else:
+        loader = torch.utils.data.DataLoader(dataset, batch_size=bs, shuffle=True)
 
     epoch_loss = 0.0
     num_batches = 0
@@ -319,6 +344,11 @@ for epoch in range(epochs):
         
         # Start samples and times sized to current batch
         x_0 = source_dist.sample((batch_curr,)).unsqueeze(1).to(device)
+        if args.clamp == True:
+            x_0 = torch.clamp(x_0, -3.0, 3.0)  # Clamp for uniform distribution
+
+        # print(f"max x_0: {x_0.max().item():.4f}, min x_0: {x_0.min().item():.4f}")
+
         t = torch.rand(batch_curr).to(device) # time sampling randomly from [0, 1] (continuous)
         
         # Sample probability path
@@ -339,10 +369,10 @@ for epoch in range(epochs):
     if not LRfixed:
         scheduler.step() # scheduler step at the end of the epoch
 
+    avg_loss = epoch_loss / num_batches
+
     # Log progress
     if epoch % print_every == 0:
-        avg_loss = epoch_loss / num_batches
-
         # Total time elapsed
         total_time_str = get_elapsed_time(global_start_time)
         elapsed = time.time() - global_start_time
@@ -369,6 +399,7 @@ for epoch in range(epochs):
             'model_state_dict': vf4.state_dict(),
             'optimizer_state_dict': optim4.state_dict(),
             'loss': avg_loss,
+            'loss_history': losses_exp4,
         }
         if not LRfixed:
             save_dict['lr'] = scheduler.get_last_lr()[0]
