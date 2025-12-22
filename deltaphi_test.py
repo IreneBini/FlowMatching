@@ -1,6 +1,40 @@
+""" FLOW MATCHING FOR 1D DISTRIBUTION LEARNING (dphi)
+
+DESCRIPTION:
+This script implements a Continuous Normalizing Flow (CNF) using the Flow
+Matching paradigm to learn and generate a 1-dimensional distribution (dphi).
+It maps a simple source distribution (Uniform or Gaussian) to a target
+"realistic" distribution derived from a NumPy dataset.
+
+KEY COMPONENTS:
+1. Model Architecture: 
+   - A Multi-Layer Perceptron (MLP) with Swish activations.
+   - Designed to predict the velocity field v(x, t).
+2. Probability Path:
+   - Uses AffineProbPath with an Optimal Transport (CondOT) scheduler.
+   - Defines the linear trajectory between noise (t=0) and data (t=1).
+3. Training:
+   - Supports both fixed and variable learning rates (StepLR).
+   - Implements dynamic batching (switching to full-batch after initial epochs).
+   - Tracks GPU memory usage and saves periodic checkpoints.
+4. Inference & Evaluation:
+   - Solves the learned Neural ODE using the 'dopri5' solver.
+   - Generates 100,000 samples and visualizes the evolution of the 
+     distribution over time-steps.
+
+USAGE:
+Run via CLI with optional arguments:
+    python <script_name>.py --name "experiment_name" --variable_lr
+
+OUTPUTS:
+- Checkpoints (.pth) saved in experiment-specific folders.
+- Training loss plot (log scale).
+- Temporal evolution plots of the distribution.
+- Final comparison histogram (Generated vs. Target).
+"""
+
 import argparse
 import datetime
-import flow_matching
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
@@ -79,21 +113,140 @@ def get_elapsed_time(start_time):
     elapsed = time.time() - start_time
     return str(datetime.timedelta(seconds=int(elapsed)))
 
+def save_evaluation_plots(epoch, model, source_dist, target_data, device, base_dir):
+    """Generates samples and saves comparison plots for a specific epoch.
+    """
+    epoch_dir = os.path.join(base_dir, f"epoch_{epoch}")
+    os.makedirs(epoch_dir, exist_ok=True)
+    
+    # Setup solver
+    wrapped_model = WrappedModel(model)
+    solver = ODESolver(velocity_model=wrapped_model)
+    T = torch.linspace(0, 1, 100).to(device)
+    
+    n_samples = 50000 
+    x_init = source_dist.sample((n_samples,)).unsqueeze(1).to(device)
+    
+    sol = solver.sample(
+        time_grid=T,
+        x_init=x_init,
+        method='dopri5',
+        step_size=None,
+        return_intermediates=True
+        ).cpu().numpy().squeeze()
+
+    # Plot 1: Evoluzione temporale
+    fig, axes = plt.subplots(2, 5, figsize=(20, 8))
+    axes = axes.flatten()
+    indices = np.linspace(0, len(T)-1, 10, dtype=int)
+    for idx, t_idx in enumerate(indices):
+        axes[idx].hist(sol[t_idx], bins=100, density=True, alpha=0.7, color='cyan')
+        axes[idx].set_title(f't = {T[t_idx].item():.2f}')
+        axes[idx].set_xlabel('dphi')
+        axes[idx].set_ylabel('Density')
+        axes[idx].grid(alpha=0.3)
+        axes[idx].set_xlim(target_data.min() - 0.5, target_data.max() + 0.5)
+    plt.suptitle('Distribution Evolution (Realistic dphi)', fontsize=14, y=1.00)
+    plt.tight_layout()
+    plt.savefig(os.path.join(epoch_dir, 'dphi_distribution_evolution.png'))
+    plt.close()
+
+    final_positions = sol[-1, :]
+
+    # Plot 2: Confronto Finale
+    plt.figure(figsize=(8, 5))
+    plt.hist(target_data, bins=100, density=True, alpha=0.5, color='red', label='Target (Data)')
+    plt.hist(final_positions, bins=100, density=True, alpha=0.7, color='cyan', label='Generated')
+    plt.xlabel('dphi', fontsize=12)
+    plt.ylabel('Density', fontsize=12)
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.title(f'Comparison at Epoch {epoch}', fontsize=12)
+    plt.savefig(os.path.join(epoch_dir, 'final_comparison.png'))
+    plt.close()
+
+def save_loss_plot(losses, epoch, base_dir):
+    """Saves the training loss plot up to the current epoch.
+    """
+    epoch_dir = os.path.join(base_dir, f"epoch_{epoch}")
+    os.makedirs(epoch_dir, exist_ok=True)
+    
+    plt.figure(figsize=(10, 4))
+    plt.plot(losses, alpha=0.3, color='gray', label='Batch Loss')
+    
+    # Compute and plot moving average
+    if len(losses) > 100:
+        ma = np.convolve(losses, np.ones(100)/100, mode='valid')
+        plt.plot(ma, linewidth=2, color='blue', label='Moving Average (100)')
+    
+    plt.xlabel('Iteration')
+    plt.ylabel('Loss')
+    plt.title(f'Training Loss up to Epoch {epoch}')
+    plt.yscale('log')
+    plt.grid(alpha=0.3)
+    plt.legend()
+    
+    plt.savefig(os.path.join(epoch_dir, 'loss_history.png'), dpi=200)
+    plt.close()
+
+def create_experiment_summary(checkpoint_dir, name, args, dphi, total_params, hidden_dim, num_layers, epochs, bs, lr, LRfixed, step_size=None, gamma=None):
+    summary_path = os.path.join(checkpoint_dir, "experiment_summary.txt")
+    with open(summary_path, "w") as f:
+        f.write("EXPERIMENT SUMMARY\n")
+        f.write("==================\n")
+        f.write(f"Date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Experiment Name: {name}\n")
+        f.write("-" * 20 + "\n")
+        f.write("DATASET INFO:\n")
+        f.write(f"Target File:         deltaphimoredata.npy\n")
+        f.write(f"Dataset Size:        {len(dphi)} samples\n")
+        f.write(f"Target Variable:     dphi\n")
+        f.write("-" * 20 + "\n")
+        f.write("MODEL ARCHITECTURE:\n")
+        f.write(f"Type:                MLP\n")
+        f.write(f"Layers:              {num_layers}\n")
+        f.write(f"Hidden Dim:          {hidden_dim}\n")
+        f.write(f"Activation:          Swish (Sigmoid * x)\n")
+        f.write(f"Total Parameters:    {total_params:,}\n")
+        f.write("-" * 20 + "\n")
+        f.write("FLOW PARAMETERS:\n")
+        f.write(f"Source Dist:         {args.source_dist.capitalize()}\n")
+        if args.source_dist == "uniform":
+            f.write("Source Range:        [-3.0, 3.0]\n")
+        else:
+            f.write("Source Params:       Mean=0, Std=1\n")
+        f.write("Path Type:           AffineProbPath\n")
+        f.write("Scheduler:           CondOTScheduler (Optimal Transport)\n")
+        f.write("-" * 20 + "\n")
+        f.write("TRAINING CONFIGURATION:\n")
+        f.write(f"Epochs:              {epochs}\n")
+        f.write(f"Initial Batch Size:  {bs}\n")
+        f.write("Dynamic Batching:    Full-dataset after epoch 2\n")
+        f.write(f"Optimizer:           Adam (lr={lr})\n")
+        f.write(f"LR Strategy:         {'Fixed' if LRfixed else 'StepLR'}\n")
+        if not LRfixed:
+            f.write(f"Scheduler Params:    StepSize={step_size}, Gamma={gamma}\n")
+        f.write("-" * 48 + "\n")
+        f.write("EVALUATION CONFIG (In-Training):\n")
+        f.write("ODE Solver:          dopri5\n")
+        f.write("Eval Samples:        50,000\n")
+        f.write("==================\n")
+
+    print(f"--- Summary file created at: {summary_path} ---")   
+
 global_start_time = time.time()
 
 parser = argparse.ArgumentParser(description="Training Flow Matching per dphi")
 parser.add_argument("--name", type=str, default="t_uniform", help="Nome dell'esperimento/cartella")
 parser.add_argument("--variable_lr", action="store_true", help="Se presente, usa il learning rate variabile (default: Fixed)")
+parser.add_argument("--source_dist", type=str, default="uniform", choices=["uniform", "gaussian"], help="Distribuzione sorgente: 'uniform' o 'gaussian'")
 
 args = parser.parse_args()
 
-# Assegnazione variabili
 name = args.name
 LRfixed = not args.variable_lr  # Se variable_lr è True, LRfixed diventa False
 
-# Se vuoi che il nome della cartella rifletta automaticamente la scelta del LR:
-suffix = "LRfixed" if LRfixed else "LRvariable"
-checkpoint_dir = f"checkpoints_{name}_{suffix}"
+checkpoint_dir = f"checkpoints_{name}"
 os.makedirs(checkpoint_dir, exist_ok=True)
 
 realistic_dataset = np.load("deltaphimoredata.npy")
@@ -104,15 +257,16 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
 
 lr = 0.001
-epochs = 100001
+epochs = 10001
 bs = 20480
 print_every = 100
-save_every = 500
+save_every = 100
+hidden_dim = 128
+num_layers = 6
 
-vf4 = MLP(input_dim=1, time_dim=1, hidden_dim=128, num_layers=6).to(device)
+vf4 = MLP(input_dim=1, time_dim=1, hidden_dim=hidden_dim, num_layers=num_layers).to(device)
 path = AffineProbPath(scheduler=CondOTScheduler())
 optim4 = torch.optim.Adam(vf4.parameters(), lr=lr)
-
 
 if LRfixed:
     print("Using fixed learning rate.")
@@ -128,7 +282,13 @@ total_params = sum(p.numel() for p in vf4.parameters())
 print(f"Model Parameters: {total_params}")
 
 # start distribution: uniform -3, 3. The range is chosen to cover the dphi data range.
-source_dist = torch.distributions.Uniform(-3.0, 3.0)
+if args.source_dist == "gaussian":
+    source_dist = torch.distributions.Normal(0.0, 1.0)
+elif args.source_dist == "uniform":
+    source_dist = torch.distributions.Uniform(-3.0, 3.0)
+
+# Create summary file
+create_experiment_summary(checkpoint_dir, name, args, dphi, total_params, hidden_dim, num_layers, epochs, bs, lr, LRfixed, step_size if not LRfixed else None, gamma if not LRfixed else None)
 
 # Training loop
 losses_exp4 = []
@@ -179,106 +339,55 @@ for epoch in range(epochs):
     if not LRfixed:
         scheduler.step() # scheduler step at the end of the epoch
 
-    # Alla fine dell'epoca
-    del batch, x_1, x_0, t, out, loss  # Rimuove i riferimenti ai tensori del batch
-    torch.cuda.empty_cache()
-
     # Log progress
     if epoch % print_every == 0:
-        if not LRfixed:
-            current_lr = scheduler.get_last_lr()[0]
-
         avg_loss = epoch_loss / num_batches
 
-        # Tempo totale dall'inizio dello script
+        # Total time elapsed
         total_time_str = get_elapsed_time(global_start_time)
         elapsed = time.time() - global_start_time
 
         if LRfixed:
             print(f'| Epoch {epoch:6d} | loss {avg_loss:8.3f} | {elapsed * 1000 / print_every:5.2f} ms/epoch | Total Time {total_time_str}')
         else:
+            current_lr = scheduler.get_last_lr()[0]
             print(f'| Epoch {epoch:6d} | LR: {current_lr:.6f} | loss {avg_loss:8.3f} | {elapsed * 1000 / print_every:5.2f} ms/epoch | Total Time {total_time_str}')
         
         print_gpu_memory(epoch=epoch)
 
-    # save checkpoint every 100 epochs
+    # save checkpoint and evaluation plots
     if epoch > 0 and epoch % save_every == 0:
-        checkpoint_path = os.path.join(checkpoint_dir, f'model_epoch_{epoch}.pth')
-        if LRfixed:
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': vf4.state_dict(),
-                'optimizer_state_dict': optim4.state_dict(),
-                'loss': avg_loss,
-            }, checkpoint_path)
-        else:
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': vf4.state_dict(),
-                'optimizer_state_dict': optim4.state_dict(),
-                'loss': avg_loss,
-                'lr': scheduler.get_last_lr()[0]
-            }, checkpoint_path)
-        print(f"---> Checkpoint saved: {checkpoint_path}")
+        # Create epoch directory
+        epoch_dir = os.path.join(checkpoint_dir, f'epoch_{epoch}')
+        os.makedirs(epoch_dir, exist_ok=True)
+        
+        checkpoint_path = os.path.join(epoch_dir, f'model_epoch_{epoch}.pth')
+        
+        # Save checkpoint
+        save_dict = {
+            'epoch': epoch,
+            'model_state_dict': vf4.state_dict(),
+            'optimizer_state_dict': optim4.state_dict(),
+            'loss': avg_loss,
+        }
+        if not LRfixed:
+            save_dict['lr'] = scheduler.get_last_lr()[0]
+            
+        torch.save(save_dict, checkpoint_path)
+        print(f"--- Checkpoint saved: {checkpoint_path} ---")
 
-# Plot training loss
-print(f"Total iterations: {len(losses_exp4)}")
-plt.figure(figsize=(10, 4))
-plt.plot(losses_exp4, alpha=0.6)
-plt.plot(np.convolve(losses_exp4, np.ones(100)/100, mode='valid'), linewidth=2, label='Moving Average (100)')
-plt.xlabel('Iteration')
-plt.ylabel('Loss')
-plt.title('Realistic dphi Training Loss')
-plt.legend()
-plt.grid(alpha=0.3)
-plt.yscale('log')
-plt.savefig(os.path.join(checkpoint_dir, f'dphi_training_loss_{name}.png'), dpi=300)
-plt.close()
+        # Generate evaluation plots
+        vf4.eval() # Set to evaluation mode
+        save_evaluation_plots(epoch, vf4, source_dist, dphi, device, checkpoint_dir)
+        print(f"--- Evaluation plots saved for epoch {epoch} ---")
+        
+        vf4.train() # Return to training mode
 
-
-# Sample trajectories
-wrapped_vf4 = WrappedModel(vf4)
-solver4 = ODESolver(velocity_model=wrapped_vf4)
-T = torch.linspace(0, 1, 200).to(device)
-n_samples = 100000
-x_init_exp4 = source_dist.sample((n_samples,)).unsqueeze(1).to(device)
-sol_exp4 = solver4.sample(
-    time_grid=T, 
-    x_init=x_init_exp4, 
-    method='dopri5', 
-    step_size=None, 
-    return_intermediates=True
-)
-sol_exp4 = sol_exp4.cpu().numpy().squeeze()
-
-print(f"Generated trajectories shape: {sol_exp4.shape}")
-
-# Visualize evolution over time
-fig, axes = plt.subplots(2, 5, figsize=(20, 8))
-axes = axes.flatten()
-time_indices = np.linspace(0, len(T)-1, 10, dtype=int)
-
-for idx, t_idx in enumerate(time_indices):
-    axes[idx].hist(sol_exp4[t_idx], bins=100, density=True, alpha=0.7, color='cyan')
-    axes[idx].set_title(f't = {T[t_idx].cpu().item():.2f}')
-    axes[idx].set_xlabel('dphi')
-    axes[idx].set_ylabel('Density')
-    axes[idx].grid(alpha=0.3)
-    # Set xlim based on data range
-    axes[idx].set_xlim(dphi.min() - 0.5, dphi.max() + 0.5)
-
-plt.suptitle('Distribution Evolution (Realistic dphi)', fontsize=14, y=1.00)
-plt.tight_layout()
-plt.savefig(os.path.join(checkpoint_dir, f'dphi_distribution_evolution_{name}.png'), dpi=300)
-plt.close()
-
-final_positions_exp4 = sol_exp4[-1, :]
-plt.hist(dphi, bins=100, density=True, alpha=0.5, color='red', label='Target')
-plt.hist(final_positions_exp4, bins=100, density=True, alpha=0.7, color='cyan', label='Generated')
-plt.xlabel('dphi', fontsize=12)
-plt.ylabel('Density', fontsize=12)
-plt.title('Final Distribution: Generated vs Target', fontsize=12)
-plt.legend()
-plt.grid(alpha=0.3)
-plt.savefig(os.path.join(checkpoint_dir, f'final_dphi_distribution_{name}.png'), dpi=300)
-plt.close()
+        # 4. Updated Loss Plot Generation
+        print(f"Total iterations: {len(losses_exp4)}")
+        save_loss_plot(losses_exp4, epoch, checkpoint_dir)
+        print(f"--- Loss plot saved for epoch {epoch} ---")
+    
+    # Remove references to batch tensors to free memory at the end of each epoch
+    del batch, x_1, x_0, t, out, loss
+    torch.cuda.empty_cache()
