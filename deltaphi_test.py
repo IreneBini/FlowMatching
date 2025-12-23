@@ -1,10 +1,11 @@
 """ FLOW MATCHING FOR 1D DISTRIBUTION LEARNING (dphi)
 
 DESCRIPTION:
-This script implements a Continuous Normalizing Flow (CNF) using the Flow
-Matching paradigm to learn and generate a 1-dimensional distribution (dphi).
-It maps a simple source distribution (Uniform or Gaussian) to a target
-"realistic" distribution derived from a NumPy dataset.
+This script implements a Continuous Normalizing Flow (CNF) using the
+Flow Matching paradigm to learn and generate a 1-dimensional
+distribution (dphi). It maps a simple source distribution (Uniform or
+Gaussian) to a target "realistic" distribution derived from a NumPy
+dataset.
 
 KEY COMPONENTS:
 1. Model Architecture: 
@@ -15,16 +16,17 @@ KEY COMPONENTS:
    - Defines the linear trajectory between noise (t=0) and data (t=1).
 3. Training:
    - Supports both fixed and variable learning rates (StepLR).
-   - Implements dynamic batching (switching to full-batch after initial epochs).
+   - Implements dynamic batching (switching to full-batch after initial
+     epochs).
    - Tracks GPU memory usage and saves periodic checkpoints.
 4. Inference & Evaluation:
    - Solves the learned Neural ODE using the 'dopri5' solver.
-   - Generates 100,000 samples and visualizes the evolution of the 
+   - Generates 500000 samples and visualizes the evolution of the 
      distribution over time-steps.
 
 USAGE EXAMPLE:
     - Use Gaussian source distribution with clamping:
-        - python deltaphi_test.py --name gaus --source_dist gaussian --clamp 
+        - python deltaphi_test.py --name gaus --source_dist gaussian --clamp
     - Use Uniform source distribution with variable learning rate:
         - python deltaphi_test.py --name uniform_varLR --source_dist uniform --variable_lr
     - Resume training from a specific checkpoint:
@@ -32,22 +34,23 @@ USAGE EXAMPLE:
 
 OUTPUTS:
 - Checkpoints (.pth) saved in experiment-specific folders.
-- Training loss plot (log scale).
+- Training loss plot.
 - Temporal evolution plots of the distribution.
-- Final comparison histogram (Generated vs. Target).
+- Final comparison histogram (Generated vs Target).
 """
 
 import argparse
 import datetime
-import numpy as np
-import torch
 import matplotlib.pyplot as plt
+import numpy as np
+import os
+import time
+import torch
+
 from flow_matching.path.scheduler import CondOTScheduler
 from flow_matching.path import AffineProbPath
 from flow_matching.solver import ODESolver
 from flow_matching.utils import ModelWrapper
-import os
-import time
 from torch import nn, Tensor
 
 # Activation class
@@ -60,7 +63,13 @@ class Swish(nn.Module):
 
 # Model class
 class MLP(nn.Module):
-    def __init__(self, input_dim: int = 1, time_dim: int = 1, hidden_dim: int = 128, num_layers: int = 4):
+    def __init__(
+            self,
+            input_dim: int = 1,
+            time_dim: int = 1,
+            hidden_dim: int = 128,
+            num_layers: int = 4
+        ):
         super().__init__()
         
         self.input_dim = input_dim
@@ -107,7 +116,10 @@ def print_gpu_memory(epoch=None, step=None):
         prefix = f"| Epoch {epoch}" if epoch is not None else "| Memory"
         if step is not None: prefix += f", Step {step}"
         
-        print(f"{prefix} | GPU Alloc: {allocated:.1f}MB | Reserv: {reserved:.1f}MB | Max: {max_allocated:.1f}MB")
+        print(
+            f"{prefix} | GPU Alloc: {allocated:.1f}MB | "
+            f"Reserv: {reserved:.1f}MB | Max: {max_allocated:.1f}MB"
+        )
         
         torch.cuda.reset_peak_memory_stats()
     else:
@@ -117,8 +129,16 @@ def get_elapsed_time(start_time):
     elapsed = time.time() - start_time
     return str(datetime.timedelta(seconds=int(elapsed)))
 
-def save_evaluation_plots(epoch, model, source_dist, target_data, device, base_dir):
-    """Generates samples and saves comparison plots for a specific epoch.
+def save_evaluation_plots(
+        epoch,
+        model,
+        source_dist,
+        target_data,
+        device,
+        base_dir
+    ):
+    """Generates samples and saves comparison plots for a specific
+    epoch.
     """
     epoch_dir = os.path.join(base_dir, f"epoch_{epoch}")
     os.makedirs(epoch_dir, exist_ok=True)
@@ -130,6 +150,8 @@ def save_evaluation_plots(epoch, model, source_dist, target_data, device, base_d
     
     n_samples = 50000 
     x_init = source_dist.sample((n_samples,)).unsqueeze(1).to(device)
+    if args.clamp == True:
+        x_init = torch.clamp(x_init, -3.0, 3.0)
     
     sol = solver.sample(
         time_grid=T,
@@ -139,30 +161,51 @@ def save_evaluation_plots(epoch, model, source_dist, target_data, device, base_d
         return_intermediates=True
         ).cpu().numpy().squeeze()
 
-    # Plot 1: Evoluzione temporale
+    # Plot 1: Temporal Evolution
     fig, axes = plt.subplots(2, 5, figsize=(20, 8))
     axes = axes.flatten()
     indices = np.linspace(0, len(T)-1, 10, dtype=int)
     for idx, t_idx in enumerate(indices):
-        axes[idx].hist(sol[t_idx], bins=100, density=True, alpha=0.7, color='cyan')
+        axes[idx].hist(
+            sol[t_idx],
+            bins=100,
+            density=True,
+            alpha=0.7,
+            color='cyan'
+        )
         axes[idx].set_title(f't = {T[t_idx].item():.2f}')
         axes[idx].set_xlabel('dphi')
         axes[idx].set_ylabel('Density')
         axes[idx].grid(alpha=0.3)
         axes[idx].set_xlim(target_data.min() - 0.5, target_data.max() + 0.5)
-    plt.suptitle('Distribution Evolution (Realistic dphi)', fontsize=14, y=1.00)
+    plt.suptitle('Distribution Evolution', fontsize=14, y=1.00)
     plt.tight_layout()
     plt.savefig(os.path.join(epoch_dir, 'dphi_distribution_evolution.png'))
     plt.close()
 
     final_positions = sol[-1, :]
 
-    # Plot 2: Confronto Finale
+    # Plot 2: Final Comparison
     plt.figure(figsize=(8, 5))
-    plt.hist(target_data, bins=100, density=True, alpha=0.5, color='red', label='Target (Data)')
-    plt.hist(final_positions, bins=100, density=True, alpha=0.7, color='cyan', label='Generated')
+    plt.hist(
+        target_data,
+        bins=100,
+        density=True,
+        alpha=0.5,
+        color='red',
+        label='Target'
+    )
+    plt.hist(
+        final_positions,
+        bins=100,
+        density=True,
+        alpha=0.7,
+        color='cyan',
+        label='Generated'
+    )
     plt.xlabel('dphi', fontsize=12)
     plt.ylabel('Density', fontsize=12)
+    plt.xlim(target_data.min() - 0.5, target_data.max() + 0.5)
     plt.legend()
     plt.grid(alpha=0.3)
     plt.title(f'Comparison at Epoch {epoch}', fontsize=12)
@@ -176,24 +219,134 @@ def save_loss_plot(losses, epoch, base_dir):
     os.makedirs(epoch_dir, exist_ok=True)
     
     plt.figure(figsize=(10, 4))
-    plt.plot(losses, alpha=0.3, color='gray', label='Batch Loss')
+    plt.plot(losses, alpha=0.3, color='blue', label='Batch Loss')
     
     # Compute and plot moving average
     if len(losses) > 100:
         ma = np.convolve(losses, np.ones(100)/100, mode='valid')
-        plt.plot(ma, linewidth=2, color='blue', label='Moving Average (100)')
+        plt.plot(ma, linewidth=2, color='gray', label='Moving Average (100)')
     
     plt.xlabel('Iteration')
     plt.ylabel('Loss')
     plt.title(f'Training Loss up to Epoch {epoch}')
-    plt.yscale('log')
+    # plt.yscale('log')
     plt.grid(alpha=0.3)
     plt.legend()
     
     plt.savefig(os.path.join(epoch_dir, 'loss_history.png'), dpi=200)
     plt.close()
 
-def create_experiment_summary(checkpoint_dir, name, args, dphi, total_params, hidden_dim, num_layers, epochs, bs, lr, LRfixed, step_size=None, gamma=None):
+def plot_flow_dynamics(
+        epoch,
+        model,
+        solver,
+        source_dist,
+        target_data,
+        device,
+        base_dir
+    ):
+    """Plots the flow dynamics including the velocity field and sample
+    trajectories.
+    """
+    epoch_dir = os.path.join(base_dir, f"epoch_{epoch}")
+    os.makedirs(epoch_dir, exist_ok=True)
+
+    # Create grid for velocity field
+    t_range = torch.linspace(0, 1, 20).to(device)
+    x_range = torch.linspace(target_data.min() - 1, target_data.max() + 1, 50).to(device)
+    T_grid, X_grid = torch.meshgrid(t_range, x_range, indexing='ij')
+    
+    with torch.no_grad():
+        v_pred = model(X_grid.reshape(-1, 1), T_grid.reshape(-1, 1))
+        V = v_pred.reshape(T_grid.shape).cpu().numpy()
+
+    # Generate sample trajectories
+    n_traj = 50
+    x_init = source_dist.sample((n_traj,)).unsqueeze(1).to(device)
+    t_eval = torch.linspace(0, 1, 100).to(device)
+    
+    with torch.no_grad():
+        trajectories = solver.sample(
+            time_grid=t_eval,
+            x_init=x_init,
+            method='dopri5',
+            step_size=None,
+            return_intermediates=True
+        )
+        trajectories = trajectories.cpu().numpy().squeeze()
+
+    # Plotting
+    plt.figure(figsize=(12, 7))
+    t_np = t_range.cpu().numpy()
+    x_np = x_range.cpu().numpy()
+
+    # Compute max absolute velocity for normalization
+    v_max_abs = np.abs(V).max()
+
+    strm = plt.streamplot(
+        t_np,
+        x_np,
+        np.ones_like(V.T),
+        V.T,
+        color=V.T,
+        cmap='coolwarm',
+        norm=plt.Normalize(vmin=-v_max_abs, vmax=v_max_abs)
+        #alpha=0.3
+    )
+    
+    for i in range(n_traj):
+        plt.plot(
+            t_eval.cpu().numpy(),
+            trajectories[:, i],
+            color='black',
+            alpha=0.2,
+            lw=1
+        )
+    
+    plt.scatter(
+        np.ones(n_traj),
+        trajectories[-1, :],
+        color='red',
+        s=10,
+        label='Generated (t=1)',
+        zorder=5
+    )
+    plt.scatter(
+        np.zeros(n_traj),
+        trajectories[0, :],
+        color='blue',
+        s=10,
+        label='Source (t=0)',
+        zorder=5
+    )
+
+    plt.title(f'Flow Dynamics & Velocity Field - Epoch {epoch}')
+    plt.xlabel('Time $t$')
+    plt.ylabel('Position $x$ (dphi)')
+    plt.xlim(-0.05, 1.05)
+    plt.colorbar(strm.lines, label='Velocity $v(x, t)$')
+    plt.legend()
+    plt.grid(alpha=0.2)
+    
+    plt.savefig(os.path.join(epoch_dir, 'flow_dynamics.png'), dpi=200)
+    plt.close()
+
+def create_experiment_summary(
+        checkpoint_dir,
+        name,
+        args,
+        dataset_size,
+        total_params,
+        hidden_dim,
+        num_layers,
+        epochs,
+        bs,
+        lr,
+        step_size=None,
+        gamma=None
+    ):
+    """Creates a summary file documenting the experiment configuration.
+    """
     summary_path = os.path.join(checkpoint_dir, "experiment_summary.txt")
     with open(summary_path, "w") as f:
         f.write("EXPERIMENT SUMMARY\n")
@@ -203,7 +356,7 @@ def create_experiment_summary(checkpoint_dir, name, args, dphi, total_params, hi
         f.write("-" * 20 + "\n")
         f.write("DATASET INFO:\n")
         f.write(f"Target File:         deltaphimoredata.npy\n")
-        f.write(f"Dataset Size:        {len(dphi)} samples\n")
+        f.write(f"Dataset Size:        {dataset_size} samples\n")
         f.write(f"Target Variable:     dphi\n")
         f.write("-" * 20 + "\n")
         f.write("MODEL ARCHITECTURE:\n")
@@ -229,8 +382,8 @@ def create_experiment_summary(checkpoint_dir, name, args, dphi, total_params, hi
         f.write(f"Initial Batch Size:  {bs}\n")
         f.write(f"Dynamic Batching:    Full-dataset after epoch 2\n")
         f.write(f"Optimizer:           Adam (lr={lr})\n")
-        f.write(f"LR Strategy:         {'Fixed' if LRfixed else 'StepLR'}\n")
-        if not LRfixed:
+        f.write(f"LR Strategy:         {'Fixed' if args.variable_lr == False else 'StepLR'}\n")
+        if not args.variable_lr:
             f.write(f"Scheduler Params:    StepSize={step_size}, Gamma={gamma}\n")
         f.write("-" * 20 + "\n")
         f.write("EVALUATION CONFIG (In-Training):\n")
@@ -243,17 +396,41 @@ def create_experiment_summary(checkpoint_dir, name, args, dphi, total_params, hi
 global_start_time = time.time()
 start_time = time.time()
 
-parser = argparse.ArgumentParser(description="Training Flow Matching per dphi")
-parser.add_argument("--name", type=str, default="t_uniform", help="Nome dell'esperimento/cartella")
-parser.add_argument("--variable_lr", action="store_true", help="Se presente, usa il learning rate variabile (default: Fixed)")
-parser.add_argument("--source_dist", type=str, default="uniform", choices=["uniform", "gaussian"], help="Distribuzione sorgente: 'uniform' o 'gaussian'")
-parser.add_argument("--clamp", action="store_true", help="Se presente, clampa i campioni della distribuzione uniforme nell'intervallo [-3, 3]")
-parser.add_argument("--resume", type=str, default=None, help="Percorso del file .pth per riprendere il training")
+parser = argparse.ArgumentParser(description="Training Flow Matching")
+parser.add_argument(
+    "--name",
+    type=str,
+    default="t_uniform",
+    help="Experiment name for checkpoint directory"
+)
+parser.add_argument(
+    "--variable_lr",
+    action="store_true",
+    help="If set, uses variable learning rate schedule; otherwise fixed LR"
+)
+parser.add_argument(
+    "--source_dist",
+    type=str,
+    default="uniform",
+    choices=["uniform", "gaussian"],
+    help="Source distribution: 'uniform' or 'gaussian'"
+)
+parser.add_argument(
+    "--clamp",
+    action="store_true",
+    help="If set, clamps samples of the distribution to the range [-3, 3]"
+)
+parser.add_argument(
+    "--resume",
+    type=str,
+    default=None,
+    help="Path to .pth file to resume training"
+)
 
 args = parser.parse_args()
 
 name = args.name
-LRfixed = not args.variable_lr  # Se variable_lr è True, LRfixed diventa False
+LRfixed = not args.variable_lr
 
 checkpoint_dir = f"checkpoints_{name}"
 os.makedirs(checkpoint_dir, exist_ok=True)
@@ -273,7 +450,12 @@ save_every = 100
 hidden_dim = 128
 num_layers = 6
 
-vf4 = MLP(input_dim=1, time_dim=1, hidden_dim=hidden_dim, num_layers=num_layers).to(device)
+vf4 = MLP(
+    input_dim=1,
+    time_dim=1,
+    hidden_dim=hidden_dim,
+    num_layers=num_layers
+).to(device)
 path = AffineProbPath(scheduler=CondOTScheduler())
 optim4 = torch.optim.Adam(vf4.parameters(), lr=lr)
 losses_exp4 = []
@@ -285,7 +467,11 @@ else:
     # scheduler parameters
     step_size = 100 # LR decrease every 100 epochs
     gamma = 0.5 # LR decrease factor
-    scheduler = torch.optim.lr_scheduler.StepLR(optim4, step_size=step_size, gamma=gamma)
+    scheduler = torch.optim.lr_scheduler.StepLR(
+        optim4,
+        step_size=step_size,
+        gamma=gamma
+    )
 
 # Resume from checkpoint if specified
 start_epoch = 0
@@ -295,7 +481,7 @@ if args.resume and os.path.isfile(args.resume):
     
     vf4.load_state_dict(checkpoint['model_state_dict'])
     optim4.load_state_dict(checkpoint['optimizer_state_dict'])
-    start_epoch = checkpoint['epoch'] + 1 # Riprendiamo dall'epoca successiva
+    start_epoch = checkpoint['epoch'] + 1
     
     if 'loss_history' in checkpoint:
         losses_exp4 = checkpoint['loss_history']
@@ -310,27 +496,47 @@ if args.resume and os.path.isfile(args.resume):
 total_params = sum(p.numel() for p in vf4.parameters())
 print(f"Model Parameters: {total_params}")
 
-# start distribution: uniform -3, 3. The range is chosen to cover the dphi data range.
+# Define source distribution
 if args.source_dist == "gaussian":
     source_dist = torch.distributions.Normal(0.0, 1.0)
 elif args.source_dist == "uniform":
     source_dist = torch.distributions.Uniform(-3.0, 3.0)
 
 # Create summary file
-create_experiment_summary(checkpoint_dir, name, args, dphi, total_params, hidden_dim, num_layers, epochs, bs, lr, LRfixed, step_size if not LRfixed else None, gamma if not LRfixed else None)
+create_experiment_summary(
+    checkpoint_dir,
+    name,
+    args,
+    len(dphi),
+    total_params,
+    hidden_dim,
+    num_layers,
+    epochs,
+    bs,
+    lr,
+    step_size if not LRfixed else None,
+    gamma if not LRfixed else None
+)
 
 # Create a custom sampler for dphi distribution
 dphi_tensor = torch.from_numpy(dphi).float()
 
 # Create a DataLoader over the full dataset and iterate in batches
 dataset = torch.utils.data.TensorDataset(dphi_tensor.unsqueeze(1))
-# loader = torch.utils.data.DataLoader(dataset, batch_size=bs, shuffle=True)
 
 for epoch in range(start_epoch, epochs):
     if epoch >= 2:
-        loader = torch.utils.data.DataLoader(dataset, batch_size=len(dataset), shuffle=True)
+        loader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=len(dataset),
+            shuffle=True
+        )
     else:
-        loader = torch.utils.data.DataLoader(dataset, batch_size=bs, shuffle=True)
+        loader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=bs,
+            shuffle=True
+        )
 
     epoch_loss = 0.0
     num_batches = 0
@@ -339,17 +545,15 @@ for epoch in range(start_epoch, epochs):
         optim4.zero_grad()
         
         # Batch from dataset
-        x_1 = batch[0].to(device)  # shape (batch_curr, 1)
+        x_1 = batch[0].to(device) # shape (batch_curr, 1)
         batch_curr = x_1.size(0)
         
         # Start samples and times sized to current batch
         x_0 = source_dist.sample((batch_curr,)).unsqueeze(1).to(device)
         if args.clamp == True:
-            x_0 = torch.clamp(x_0, -3.0, 3.0)  # Clamp for uniform distribution
+            x_0 = torch.clamp(x_0, -3.0, 3.0) # Clamp for uniform distribution
 
-        # print(f"max x_0: {x_0.max().item():.4f}, min x_0: {x_0.min().item():.4f}")
-
-        t = torch.rand(batch_curr).to(device) # time sampling randomly from [0, 1] (continuous)
+        t = torch.rand(batch_curr).to(device) # Uniform(0, 1) times
         
         # Sample probability path
         path_sample = path.sample(t=t, x_0=x_0, x_1=x_1)
@@ -378,10 +582,18 @@ for epoch in range(start_epoch, epochs):
         elapsed = time.time() - global_start_time
 
         if LRfixed:
-            print(f'| Epoch {epoch:6d} | loss {avg_loss:8.3f} | {elapsed * 1000 / print_every:5.2f} ms/epoch | Total Time {total_time_str}')
+            print(
+                f'| Epoch {epoch:6d} | loss {avg_loss:8.3f} | '
+                f'{elapsed * 1000 / print_every:5.2f} ms/epoch | '
+                f'Total Time {total_time_str}'
+            )
         else:
             current_lr = scheduler.get_last_lr()[0]
-            print(f'| Epoch {epoch:6d} | LR: {current_lr:.6f} | loss {avg_loss:8.3f} | {elapsed * 1000 / print_every:5.2f} ms/epoch | Total Time {total_time_str}')
+            print(
+                f'| Epoch {epoch:6d} | LR: {current_lr:.6f} | '
+                f'loss {avg_loss:8.3f} | {elapsed * 1000 / print_every:5.2f} '
+                f'ms/epoch | Total Time {total_time_str}'
+            )
         
         print_gpu_memory(epoch=epoch)
 
@@ -409,8 +621,29 @@ for epoch in range(start_epoch, epochs):
 
         # Generate evaluation plots
         vf4.eval() # Set to evaluation mode
-        save_evaluation_plots(epoch, vf4, source_dist, dphi, device, checkpoint_dir)
+        save_evaluation_plots(
+            epoch,
+            vf4,
+            source_dist,
+            dphi,
+            device,
+            checkpoint_dir
+        )
         print(f"--- Evaluation plots saved for epoch {epoch} ---")
+
+        # Flow dynamics plot
+        wrapped_model = WrappedModel(vf4)
+        solver = ODESolver(velocity_model=wrapped_model)
+        plot_flow_dynamics(
+            epoch,
+            vf4,
+            solver,
+            source_dist,
+            dphi,
+            device,
+            checkpoint_dir
+        )
+        print(f"--- Flow dynamics plot saved for epoch {epoch} ---")
         
         vf4.train() # Return to training mode
 
