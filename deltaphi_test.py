@@ -51,6 +51,7 @@ from flow_matching.path.scheduler import CondOTScheduler
 from flow_matching.path import AffineProbPath
 from flow_matching.solver import ODESolver
 from flow_matching.utils import ModelWrapper
+from scipy import stats
 from torch import nn, Tensor
 
 # Activation class
@@ -103,7 +104,7 @@ class MLP(nn.Module):
 
 class WrappedModel(ModelWrapper):
     def forward(self, x: torch.Tensor, t: torch.Tensor, **extras):
-        return self.model(x, t, **extras)
+        return self.model(x, t, **extras)       
 
 def print_gpu_memory(epoch=None, step=None):
     """Prints the current GPU memory usage.
@@ -131,35 +132,15 @@ def get_elapsed_time(start_time):
 
 def save_evaluation_plots(
         epoch,
-        model,
-        source_dist,
+        sol,
+        T,
         target_data,
-        device,
         base_dir
     ):
-    """Generates samples and saves comparison plots for a specific
-    epoch.
+    """Saves comparison plots for a specific epoch.
     """
     epoch_dir = os.path.join(base_dir, f"epoch_{epoch}")
     os.makedirs(epoch_dir, exist_ok=True)
-    
-    # Setup solver
-    wrapped_model = WrappedModel(model)
-    solver = ODESolver(velocity_model=wrapped_model)
-    T = torch.linspace(0, 1, 100).to(device)
-    
-    n_samples = 50000 
-    x_init = source_dist.sample((n_samples,)).unsqueeze(1).to(device)
-    if args.clamp == True:
-        x_init = torch.clamp(x_init, -3.0, 3.0)
-    
-    sol = solver.sample(
-        time_grid=T,
-        x_init=x_init,
-        method='dopri5',
-        step_size=None,
-        return_intermediates=True
-        ).cpu().numpy().squeeze()
 
     # Plot 1: Temporal Evolution
     fig, axes = plt.subplots(2, 5, figsize=(20, 8))
@@ -189,7 +170,7 @@ def save_evaluation_plots(
     plt.figure(figsize=(8, 5))
     plt.hist(
         target_data,
-        bins=100,
+        bins=50,
         density=True,
         alpha=0.5,
         color='red',
@@ -197,7 +178,7 @@ def save_evaluation_plots(
     )
     plt.hist(
         final_positions,
-        bins=100,
+        bins=50,
         density=True,
         alpha=0.7,
         color='cyan',
@@ -210,30 +191,6 @@ def save_evaluation_plots(
     plt.grid(alpha=0.3)
     plt.title(f'Comparison at Epoch {epoch}', fontsize=12)
     plt.savefig(os.path.join(epoch_dir, 'final_comparison.png'))
-    plt.close()
-
-def save_loss_plot(losses, epoch, base_dir):
-    """Saves the training loss plot up to the current epoch.
-    """
-    epoch_dir = os.path.join(base_dir, f"epoch_{epoch}")
-    os.makedirs(epoch_dir, exist_ok=True)
-    
-    plt.figure(figsize=(10, 4))
-    plt.plot(losses, alpha=0.3, color='blue', label='Batch Loss')
-    
-    # Compute and plot moving average
-    if len(losses) > 100:
-        ma = np.convolve(losses, np.ones(100)/100, mode='valid')
-        plt.plot(ma, linewidth=2, color='gray', label='Moving Average (100)')
-    
-    plt.xlabel('Iteration')
-    plt.ylabel('Loss')
-    plt.title(f'Training Loss up to Epoch {epoch}')
-    # plt.yscale('log')
-    plt.grid(alpha=0.3)
-    plt.legend()
-    
-    plt.savefig(os.path.join(epoch_dir, 'loss_history.png'), dpi=200)
     plt.close()
 
 def plot_flow_dynamics(
@@ -331,6 +288,95 @@ def plot_flow_dynamics(
     plt.savefig(os.path.join(epoch_dir, 'flow_dynamics.png'), dpi=200)
     plt.close()
 
+def save_loss_and_metrics_plot(
+        current_epoch,
+        epochs,
+        w_history_val,
+        w_history_train,
+        ks_history_val,
+        ks_history_train,
+        ks_pvalue_history_val,
+        ks_pvalue_history_train,
+        losses_train,
+        losses_val,
+        base_dir
+    ):
+    epoch_dir = os.path.join(base_dir, f"epoch_{current_epoch}")
+    os.makedirs(epoch_dir, exist_ok=True)
+
+    fig, axes = plt.subplots(2, 2, figsize=(18, 10)) 
+    axes = axes.flatten()
+    
+    # 0. Wasserstein
+    axes[0].plot(epochs, w_history_val, marker='.', color='blue', linewidth=2, alpha=0.5, label='Validation')
+    if len(w_history_val) >= 5:
+        ma = np.convolve(w_history_val, np.ones(5)/5, mode='valid')
+        ma_epochs = epochs[:-4]
+        axes[0].plot(ma_epochs, ma, linewidth=1, linestyle='--', color='blue', label='Moving Average validation')
+    axes[0].plot(epochs, w_history_train, marker='.', color='cyan', linewidth=2, alpha=0.5, label='Training')
+    if len(w_history_train) >= 5:
+        ma = np.convolve(w_history_train, np.ones(5)/5, mode='valid')
+        ma_epochs = epochs[:-4]
+        axes[0].plot(ma_epochs, ma, linewidth=1, linestyle='--', color='cyan', label='Moving Average training')
+    axes[0].set_ylabel('Wasserstein Distance')
+    axes[0].set_xlabel('Epoch')
+    axes[0].legend()
+    axes[0].set_title('Evolution of Wasserstein Distance')
+
+    # 1. KS Statistic
+    axes[1].plot(epochs, ks_history_val, marker='.', color='red', linewidth=2, alpha=0.5, label='Validation')
+    if len(ks_history_val) >= 5:
+        ma = np.convolve(ks_history_val, np.ones(5)/5, mode='valid')
+        ma_epochs = epochs[:-4]
+        axes[1].plot(ma_epochs, ma, linewidth=1, linestyle='--', color='red', label='Moving Average validation')
+    axes[1].plot(epochs, ks_history_train, marker='.', color='orange', linewidth=2, alpha=0.5, label='Training')
+    if len(ks_history_train) >= 5:
+        ma = np.convolve(ks_history_train, np.ones(5)/5, mode='valid')
+        ma_epochs = epochs[:-4]
+        axes[1].plot(ma_epochs, ma, linewidth=1, linestyle='--', color='orange', label='Moving Average training')
+    axes[1].set_ylabel('KS Statistic')
+    axes[1].set_xlabel('Epoch')
+    axes[1].legend()
+    axes[1].set_title('Evolution of KS Statistic')
+
+    # 2. KS p-value
+    axes[2].plot(epochs, ks_pvalue_history_val, marker='.', color='green', linewidth=2, alpha=0.5, label='Validation')
+    if len(ks_pvalue_history_val) >= 5:
+        ma = np.convolve(ks_pvalue_history_val, np.ones(5)/5, mode='valid')
+        ma_epochs = epochs[:-4]
+        axes[2].plot(ma_epochs, ma, linewidth=1, linestyle='--', color='green', label='Moving Average validation')
+    axes[2].plot(epochs, ks_pvalue_history_train, marker='.', color='palegreen', linewidth=2, alpha=0.5, label='Training')
+    if len(ks_pvalue_history_train) >= 5:
+        ma = np.convolve(ks_pvalue_history_train, np.ones(5)/5, mode='valid')
+        ma_epochs = epochs[:-4]
+        axes[2].plot(ma_epochs, ma, linewidth=1, linestyle='--', color='palegreen', label='Moving Average training')
+    axes[2].set_ylabel('KS p-value')
+    axes[2].set_xlabel('Epoch')
+    axes[2].set_yscale('log')
+    axes[2].legend()
+    axes[2].set_title('Evolution of KS p-value')
+
+    # 3. Loss Plot
+    iterations = range(len(losses_train))
+    axes[3].plot(iterations, losses_train, color='purple', linewidth=2, alpha=0.3, label='Training')
+    if len(losses_train) > 50:
+        ma = np.convolve(losses_train, np.ones(50)/50, mode='valid')
+        ma_iter = iterations[:-49]
+        axes[3].plot(ma_iter, ma, linewidth=1, linestyle='--', color='purple', label='Moving Average training')
+    axes[3].plot(iterations, losses_val, color='tab:purple', linewidth=2, alpha=0.3, label='Validation')
+    if len(losses_val) > 50:
+        ma = np.convolve(losses_val, np.ones(50)/50, mode='valid')
+        ma_iter = iterations[:-49]
+        axes[3].plot(ma_iter, ma, linewidth=1, linestyle='--', color='tab:purple', label='Moving Average validation')
+    axes[3].set_ylabel('Loss')
+    axes[3].set_xlabel('Epoch')
+    axes[3].legend()
+    axes[3].set_title('Evolution of Loss')
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(epoch_dir, 'loss_metrics_plots.png'), dpi=200)
+    plt.close()
+
 def create_experiment_summary(
         checkpoint_dir,
         name,
@@ -357,6 +403,7 @@ def create_experiment_summary(
         f.write("DATASET INFO:\n")
         f.write(f"Target File:         deltaphimoredata.npy\n")
         f.write(f"Dataset Size:        {dataset_size} samples\n")
+        f.write(f"Train/Val Split:     80% / 20%\n")
         f.write(f"Target Variable:     dphi\n")
         f.write("-" * 20 + "\n")
         f.write("MODEL ARCHITECTURE:\n")
@@ -391,267 +438,388 @@ def create_experiment_summary(
         f.write("Eval Samples:        50000\n")
         f.write("=" * 20 + "\n")
 
-    print(f"--- Summary file created at: {summary_path} ---")   
+    print(f"--- Summary file created at: {summary_path} ---")
 
-global_start_time = time.time()
-start_time = time.time()
+def plot_train_val_dist(train_data, val_data, base_dir):
+    """Plots and saves the training and validation distribution comparison."
+    """
+    plt.figure(figsize=(10, 6))
+    
+    # Usiamo density=True per confrontare le forme anche se il numero di campioni è diverso
+    plt.hist(train_data, bins=50, density=True, alpha=0.5, color='tab:blue', label=f'Train ({len(train_data)} samples)')
+    plt.hist(val_data, bins=50, density=True, alpha=0.5, color='tab:orange', label=f'Validation ({len(val_data)} samples)')
+    
+    plt.xlabel('dphi', fontsize=12)
+    plt.ylabel('Density', fontsize=12)
+    plt.title('Comparison: Training vs Validation Distribution', fontsize=14)
+    plt.legend()
+    plt.grid(alpha=0.3)
+    
+    # Salvataggio nella cartella principale degli esperimenti
+    save_path = os.path.join(base_dir, 'train_val_split_check.png')
+    plt.savefig(save_path, dpi=200)
+    plt.close()
 
-parser = argparse.ArgumentParser(description="Training Flow Matching")
-parser.add_argument(
-    "--name",
-    type=str,
-    default="t_uniform",
-    help="Experiment name for checkpoint directory"
-)
-parser.add_argument(
-    "--variable_lr",
-    action="store_true",
-    help="If set, uses variable learning rate schedule; otherwise fixed LR"
-)
-parser.add_argument(
-    "--source_dist",
-    type=str,
-    default="uniform",
-    choices=["uniform", "gaussian"],
-    help="Source distribution: 'uniform' or 'gaussian'"
-)
-parser.add_argument(
-    "--clamp",
-    action="store_true",
-    help="If set, clamps samples of the distribution to the range [-3, 3]"
-)
-parser.add_argument(
-    "--resume",
-    type=str,
-    default=None,
-    help="Path to .pth file to resume training"
-)
 
-args = parser.parse_args()
+if __name__ == "__main__":
+    global_start_time = time.time()
+    start_time = time.time()
 
-name = args.name
-LRfixed = not args.variable_lr
-
-checkpoint_dir = f"checkpoints_{name}"
-os.makedirs(checkpoint_dir, exist_ok=True)
-
-realistic_dataset = np.load("deltaphimoredata.npy")
-dphi = realistic_dataset[:, 2]
-
-# Initialize new model for dphi
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"Using device: {device}")
-
-lr = 0.001
-epochs = 10001
-bs = 20480
-print_every = 100
-save_every = 100
-hidden_dim = 128
-num_layers = 6
-
-vf4 = MLP(
-    input_dim=1,
-    time_dim=1,
-    hidden_dim=hidden_dim,
-    num_layers=num_layers
-).to(device)
-path = AffineProbPath(scheduler=CondOTScheduler())
-optim4 = torch.optim.Adam(vf4.parameters(), lr=lr)
-losses_exp4 = []
-
-if LRfixed:
-    print("Using fixed learning rate.")
-else:
-    print("Using variable learning rate schedule.")
-    # scheduler parameters
-    step_size = 100 # LR decrease every 100 epochs
-    gamma = 0.5 # LR decrease factor
-    scheduler = torch.optim.lr_scheduler.StepLR(
-        optim4,
-        step_size=step_size,
-        gamma=gamma
+    parser = argparse.ArgumentParser(description="Training Flow Matching")
+    parser.add_argument(
+        "--name",
+        type=str,
+        default="t_uniform",
+        help="Experiment name for checkpoint directory"
+    )
+    parser.add_argument(
+        "--variable_lr",
+        action="store_true",
+        help="If set, uses variable learning rate schedule; otherwise fixed LR"
+    )
+    parser.add_argument(
+        "--source_dist",
+        type=str,
+        default="uniform",
+        choices=["uniform", "gaussian"],
+        help="Source distribution: 'uniform' or 'gaussian'"
+    )
+    parser.add_argument(
+        "--clamp",
+        action="store_true",
+        help="If set, clamps samples of the distribution to the range [-3, 3]"
+    )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to .pth file to resume training"
     )
 
-# Resume from checkpoint if specified
-start_epoch = 0
-if args.resume and os.path.isfile(args.resume):
-    print(f"--- Loading checkpoint: {args.resume} ---")
-    checkpoint = torch.load(args.resume, map_location=device)
-    
-    vf4.load_state_dict(checkpoint['model_state_dict'])
-    optim4.load_state_dict(checkpoint['optimizer_state_dict'])
-    start_epoch = checkpoint['epoch'] + 1
-    
-    if 'loss_history' in checkpoint:
-        losses_exp4 = checkpoint['loss_history']
+    args = parser.parse_args()
 
-    if not LRfixed:
-        for _ in range(start_epoch):
-            scheduler.step()
-            
-    print(f"--- Resuming from epoch {start_epoch} ---")
+    name = args.name
+    LRfixed = not args.variable_lr
 
-# print model parameters count
-total_params = sum(p.numel() for p in vf4.parameters())
-print(f"Model Parameters: {total_params}")
+    checkpoint_dir = f"checkpoints_{name}"
+    os.makedirs(checkpoint_dir, exist_ok=True)
 
-# Define source distribution
-if args.source_dist == "gaussian":
-    source_dist = torch.distributions.Normal(0.0, 1.0)
-elif args.source_dist == "uniform":
-    source_dist = torch.distributions.Uniform(-3.0, 3.0)
+    realistic_dataset = np.load("deltaphimoredata.npy")
+    dphi = realistic_dataset[:, 2]
 
-# Create summary file
-create_experiment_summary(
-    checkpoint_dir,
-    name,
-    args,
-    len(dphi),
-    total_params,
-    hidden_dim,
-    num_layers,
-    epochs,
-    bs,
-    lr,
-    step_size if not LRfixed else None,
-    gamma if not LRfixed else None
-)
+    # Shuffle and split dataset
+    np.random.seed(42) 
+    indices = np.arange(len(dphi))
+    np.random.shuffle(indices)
+    dphi = dphi[indices]
 
-# Create a custom sampler for dphi distribution
-dphi_tensor = torch.from_numpy(dphi).float()
+    ntrain = int(0.8 * len(dphi))
+    dphi_train = dphi[:ntrain]
+    dphi_val = dphi[ntrain:]
 
-# Create a DataLoader over the full dataset and iterate in batches
-dataset = torch.utils.data.TensorDataset(dphi_tensor.unsqueeze(1))
+    plot_train_val_dist(dphi_train, dphi_val, checkpoint_dir)
 
-for epoch in range(start_epoch, epochs):
-    if epoch >= 2:
-        loader = torch.utils.data.DataLoader(
-            dataset,
-            batch_size=len(dataset),
-            shuffle=True
-        )
+    # Initialize new model for dphi
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {device}")
+
+    lr = 0.001
+    epochs = 100001
+    bs = 20480
+    save_every = 100
+    hidden_dim = 128
+    num_layers = 6
+
+    vf4 = MLP(
+        input_dim=1,
+        time_dim=1,
+        hidden_dim=hidden_dim,
+        num_layers=num_layers
+    ).to(device)
+    path = AffineProbPath(scheduler=CondOTScheduler())
+    optim4 = torch.optim.Adam(vf4.parameters(), lr=lr)
+
+    # Lists for tracking losses
+    losses_train = []
+    losses_val = []
+    # Histories for evaluation metrics
+    wasserstein_history_train = []
+    wasserstein_history_val = []
+
+    ks_stat_history_train = []
+    ks_stat_history_val = []
+
+    ks_pvalue_history_train = []
+    ks_pvalue_history_val = []
+    eval_epochs = []
+
+    if LRfixed:
+        print("Using fixed learning rate.")
     else:
-        loader = torch.utils.data.DataLoader(
-            dataset,
-            batch_size=bs,
-            shuffle=True
+        print("Using variable learning rate schedule.")
+        # scheduler parameters
+        step_size = 100 # LR decrease every 100 epochs
+        gamma = 0.5 # LR decrease factor
+        scheduler = torch.optim.lr_scheduler.StepLR(
+            optim4,
+            step_size=step_size,
+            gamma=gamma
         )
 
-    epoch_loss = 0.0
-    num_batches = 0
-
-    for batch in loader:
-        optim4.zero_grad()
+    # Resume from checkpoint if specified
+    start_epoch = 0
+    if args.resume and os.path.isfile(args.resume):
+        print(f"--- Loading checkpoint: {args.resume} ---")
+        checkpoint = torch.load(args.resume, map_location=device)
         
-        # Batch from dataset
-        x_1 = batch[0].to(device) # shape (batch_curr, 1)
-        batch_curr = x_1.size(0)
+        vf4.load_state_dict(checkpoint['model_state_dict'])
+        optim4.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_epoch = checkpoint['epoch'] + 1
         
-        # Start samples and times sized to current batch
-        x_0 = source_dist.sample((batch_curr,)).unsqueeze(1).to(device)
-        if args.clamp == True:
-            x_0 = torch.clamp(x_0, -3.0, 3.0) # Clamp for uniform distribution
+        if 'loss_history' in checkpoint:
+            losses_train = checkpoint['loss_history']
 
-        t = torch.rand(batch_curr).to(device) # Uniform(0, 1) times
-        
-        # Sample probability path
-        path_sample = path.sample(t=t, x_0=x_0, x_1=x_1)
-        out = vf4(path_sample.x_t, path_sample.t)
-        
-        # Flow matching loss
-        loss = torch.pow(out - path_sample.dx_t, 2).mean()
-        
-        # Optimizer step
-        loss.backward()
-        optim4.step()
-            
-        losses_exp4.append(loss.item())
-        epoch_loss += loss.item()
-        num_batches += 1
+        if 'w_history' in checkpoint:
+            wasserstein_history_val = checkpoint['w_history']
+        if 'ks_stat_history' in checkpoint:
+            ks_stat_history = checkpoint['ks_stat_history']
+        if 'ks_pvalue_history_val' in checkpoint:
+            ks_pvalue_history_val = checkpoint['ks_pvalue_history_val']
+        if 'eval_epochs' in checkpoint:
+            eval_epochs = checkpoint['eval_epochs']
 
-    if not LRfixed:
-        scheduler.step() # scheduler step at the end of the epoch
+        if not LRfixed:
+            for _ in range(start_epoch):
+                scheduler.step()
+                
+        print(f"--- Resuming from epoch {start_epoch} ---")
 
-    avg_loss = epoch_loss / num_batches
+    # print model parameters count
+    total_params = sum(p.numel() for p in vf4.parameters())
+    print(f"Model Parameters: {total_params}")
 
-    # Log progress
-    if epoch % print_every == 0:
-        # Total time elapsed
-        total_time_str = get_elapsed_time(global_start_time)
-        elapsed = time.time() - global_start_time
+    # Define source distribution
+    if args.source_dist == "gaussian":
+        source_dist = torch.distributions.Normal(0.0, 1.0)
+    elif args.source_dist == "uniform":
+        source_dist = torch.distributions.Uniform(-3.0, 3.0)
 
-        if LRfixed:
-            print(
-                f'| Epoch {epoch:6d} | loss {avg_loss:8.3f} | '
-                f'{elapsed * 1000 / print_every:5.2f} ms/epoch | '
-                f'Total Time {total_time_str}'
+    # Create summary file
+    create_experiment_summary(
+        checkpoint_dir,
+        name,
+        args,
+        len(dphi),
+        total_params,
+        hidden_dim,
+        num_layers,
+        epochs,
+        bs,
+        lr,
+        step_size if not LRfixed else None,
+        gamma if not LRfixed else None
+    )
+
+    # Create a custom sampler for dphi distribution
+    dphi_train_tensor = torch.from_numpy(dphi_train).float()
+
+    # Create a DataLoader over the full dataset and iterate in batches
+    dataset = torch.utils.data.TensorDataset(dphi_train_tensor.unsqueeze(1))
+
+    for epoch in range(start_epoch, epochs):
+        if epoch >= 2:
+            loader = torch.utils.data.DataLoader(
+                dataset,
+                batch_size=len(dataset),
+                shuffle=True
             )
         else:
-            current_lr = scheduler.get_last_lr()[0]
-            print(
-                f'| Epoch {epoch:6d} | LR: {current_lr:.6f} | '
-                f'loss {avg_loss:8.3f} | {elapsed * 1000 / print_every:5.2f} '
-                f'ms/epoch | Total Time {total_time_str}'
+            loader = torch.utils.data.DataLoader(
+                dataset,
+                batch_size=bs,
+                shuffle=True
             )
-        
-        print_gpu_memory(epoch=epoch)
 
-    # save checkpoint and evaluation plots
-    if epoch > 0 and epoch % save_every == 0:
-        # Create epoch directory
-        epoch_dir = os.path.join(checkpoint_dir, f'epoch_{epoch}')
-        os.makedirs(epoch_dir, exist_ok=True)
-        
-        checkpoint_path = os.path.join(epoch_dir, f'model_epoch_{epoch}.pth')
-        
-        # Save checkpoint
-        save_dict = {
-            'epoch': epoch,
-            'model_state_dict': vf4.state_dict(),
-            'optimizer_state_dict': optim4.state_dict(),
-            'loss': avg_loss,
-            'loss_history': losses_exp4,
-        }
-        if not LRfixed:
-            save_dict['lr'] = scheduler.get_last_lr()[0]
+        epoch_loss_accum = 0.0
+        num_batches = 0
+
+        for batch in loader:
+            optim4.zero_grad()
             
-        torch.save(save_dict, checkpoint_path)
-        print(f"--- Checkpoint saved: {checkpoint_path} ---")
+            # Batch from dataset
+            x_1 = batch[0].to(device) # shape (batch_curr, 1)
+            batch_curr = x_1.size(0)
+            
+            # Start samples and times sized to current batch
+            x_0 = source_dist.sample((batch_curr,)).unsqueeze(1).to(device)
+            if args.clamp == True:
+                x_0 = torch.clamp(x_0, -3.0, 3.0) # Clamp for uniform distribution
 
-        # Generate evaluation plots
-        vf4.eval() # Set to evaluation mode
-        save_evaluation_plots(
-            epoch,
-            vf4,
-            source_dist,
-            dphi,
-            device,
-            checkpoint_dir
-        )
-        print(f"--- Evaluation plots saved for epoch {epoch} ---")
+            t = torch.rand(batch_curr).to(device) # Uniform(0, 1) times
+            
+            # Sample probability path
+            path_sample = path.sample(t=t, x_0=x_0, x_1=x_1)
+            out = vf4(path_sample.x_t, path_sample.t)
+            
+            # Flow matching loss
+            loss = torch.pow(out - path_sample.dx_t, 2).mean()
+            
+            # Optimizer step
+            loss.backward()
+            optim4.step()
+                
+            epoch_loss_accum += loss.item()
+            num_batches += 1
 
-        # Flow dynamics plot
-        wrapped_model = WrappedModel(vf4)
-        solver = ODESolver(velocity_model=wrapped_model)
-        plot_flow_dynamics(
-            epoch,
-            vf4,
-            solver,
-            source_dist,
-            dphi,
-            device,
-            checkpoint_dir
-        )
-        print(f"--- Flow dynamics plot saved for epoch {epoch} ---")
-        
-        vf4.train() # Return to training mode
+        # Validation loss computation
+        vf4.eval()
+        with torch.no_grad():
+            x_1_v = torch.from_numpy(dphi_val).float().unsqueeze(1).to(device)
+            x_0_v = source_dist.sample((x_1_v.size(0),)).unsqueeze(1).to(device)
+            if args.clamp: 
+                x_0_v = torch.clamp(x_0_v, -3.0, 3.0)
+            
+            t_v = torch.rand(x_1_v.size(0)).to(device)
+            path_v = path.sample(t=t_v, x_0=x_0_v, x_1=x_1_v)
+            
+            out_v = vf4(path_v.x_t, path_v.t)
+            v_loss_val = torch.pow(out_v - path_v.dx_t, 2).mean().item()
+            losses_val.append(v_loss_val) # Questa lista ora cresce ad ogni epoca
+        vf4.train()
 
-        # 4. Updated Loss Plot Generation
-        print(f"Total iterations: {len(losses_exp4)}")
-        save_loss_plot(losses_exp4, epoch, checkpoint_dir)
-        print(f"--- Loss plot saved for epoch {epoch} ---")
-    
-    # Remove references to batch tensors to free memory at the end of each epoch
-    del batch, x_1, x_0, t, out, loss
-    torch.cuda.empty_cache()
+        if not LRfixed:
+            scheduler.step() # scheduler step at the end of the epoch
+
+        avg_loss = epoch_loss_accum / num_batches
+        losses_train.append(avg_loss)
+
+        # save checkpoint and evaluation plots
+        if epoch > 0 and epoch % save_every == 0:
+            # Evaluation: Generate samples and compute metrics
+            vf4.eval()
+            with torch.no_grad():
+                n_samples_eval = 50000 
+                x_init_eval = source_dist.sample((n_samples_eval,)).unsqueeze(1).to(device)
+                if args.clamp:
+                    x_init_eval = torch.clamp(x_init_eval, -3.0, 3.0)
+                
+                wrapped_model_eval = WrappedModel(vf4)
+                solver_eval = ODESolver(velocity_model=wrapped_model_eval)
+            
+                T_eval = torch.linspace(0, 1, 100).to(device)
+                sol_eval = solver_eval.sample(
+                    time_grid=T_eval,
+                    x_init=x_init_eval,
+                    step_size=None,
+                    method='dopri5',
+                    return_intermediates=True
+                    )
+
+                sol = sol_eval.cpu().numpy().squeeze() # reshape(len(T_eval), -1)
+                print(f"sol_eval shape: {sol_eval.shape}")
+                final_pos = sol_eval[-1].cpu().numpy().flatten() # For metric computation I need only solver at final time   
+                print(f"final_pos shape: {final_pos.shape}") 
+
+                # Compute Wasserstein distance
+                w_dist_val = stats.wasserstein_distance(dphi_val, final_pos)
+                w_dist_train = stats.wasserstein_distance(dphi_train, final_pos)
+                # Compute Kolmogorov-Smirnov statistic
+                ks_stat_val, ks_pvalue_val = stats.ks_2samp(dphi_val, final_pos)
+                ks_stat_train, ks_pvalue_train = stats.ks_2samp(dphi_train, final_pos)
+                
+                wasserstein_history_val.append(w_dist_val)
+                wasserstein_history_train.append(w_dist_train)
+
+                ks_stat_history_val.append(ks_stat_val)
+                ks_stat_history_train.append(ks_stat_train)
+
+                ks_pvalue_history_val.append(ks_pvalue_val)
+                ks_pvalue_history_train.append(ks_pvalue_train)
+                eval_epochs.append(epoch)
+
+            # Logging metrics
+            total_time_str = get_elapsed_time(global_start_time)
+            elapsed = time.time() - global_start_time
+            
+            print("-" * 100)
+            log_msg = print(f'| Epoch {epoch:6d} | Loss: {avg_loss:8.4f}')
+            if not LRfixed:
+                log_msg += f' | LR: {scheduler.get_last_lr()[0]:.6f}'
+            print(log_msg)
+            print(f'| Time: {total_time_str} | Speed: {elapsed * 1000 / epoch if epoch > 0 else 0:5.2f} ms/epoch')
+            print_gpu_memory(epoch=epoch)
+            print("-" * 100)
+
+            # Create epoch directory
+            epoch_dir = os.path.join(checkpoint_dir, f'epoch_{epoch}')
+            os.makedirs(epoch_dir, exist_ok=True)
+            
+            checkpoint_path = os.path.join(epoch_dir, f'model_epoch_{epoch}.pth')
+            
+            # Save checkpoint
+            save_dict = {
+                'epoch': epoch,
+                'model_state_dict': vf4.state_dict(),
+                'optimizer_state_dict': optim4.state_dict(),
+                'loss_history_train': losses_train,
+                'loss_history_val': losses_val,
+                'w_history_val': wasserstein_history_val,
+                'ks_stat_history_val': ks_stat_history_val,
+                'ks_pvalue_history_val': ks_pvalue_history_val,
+                'w_history_train': wasserstein_history_train,
+                'ks_stat_history_train': ks_stat_history_train,
+                'ks_pvalue_history_train': ks_pvalue_history_train,
+                'eval_epochs': eval_epochs
+            }
+            if not LRfixed:
+                save_dict['lr'] = scheduler.get_last_lr()[0]
+                
+            torch.save(save_dict, checkpoint_path)
+            print(f"--- Checkpoint saved: {checkpoint_path} ---")
+
+            # Generate evaluation plots
+            save_evaluation_plots(
+                epoch,
+                sol,
+                T_eval.cpu(),
+                dphi_val,
+                checkpoint_dir
+            )
+            print(f"--- Evaluation plots saved for epoch {epoch} ---")
+
+            # Flow dynamics plot
+            wrapped_model = WrappedModel(vf4)
+            solver = ODESolver(velocity_model=wrapped_model)
+            plot_flow_dynamics(
+                epoch,
+                vf4,
+                solver,
+                source_dist,
+                dphi_val,
+                device,
+                checkpoint_dir
+            )
+            print(f"--- Flow dynamics plot saved for epoch {epoch} ---")
+            
+            vf4.train() # Return to training mode
+
+            # 4. Updated Loss Plot Generation
+
+            save_loss_and_metrics_plot(
+                epoch,
+                eval_epochs,
+                wasserstein_history_val,
+                wasserstein_history_train,
+                ks_stat_history_val,
+                ks_stat_history_train,
+                ks_pvalue_history_val,
+                ks_pvalue_history_train,
+                losses_train,
+                losses_val,
+                checkpoint_dir
+                )
+            print(f"--- Loss and metrics evolution plot saved for epoch {epoch} ---")
+
+        # Remove references to batch tensors to free memory at the end of each epoch
+        del batch, x_1, x_0, t, out, loss
+        torch.cuda.empty_cache()
