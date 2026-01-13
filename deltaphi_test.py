@@ -136,7 +136,8 @@ def save_evaluation_plots(
         sol,
         T,
         target_data,
-        base_dir
+        base_dir,
+        dim_index=0
     ):
     """Saves comparison plots for a specific epoch.
     Args:
@@ -148,6 +149,11 @@ def save_evaluation_plots(
     """
     epoch_dir = os.path.join(base_dir, f"epoch_{epoch}")
     os.makedirs(epoch_dir, exist_ok=True)
+
+    data = target_data[:, dim_index]
+    sol = sol[:, :, dim_index]
+
+    final_positions = sol[-1, :]
 
     # Plot 1: Temporal Evolution
     fig, axes = plt.subplots(2, 5, figsize=(20, 8))
@@ -165,18 +171,16 @@ def save_evaluation_plots(
         axes[idx].set_xlabel('dphi')
         axes[idx].set_ylabel('Density')
         axes[idx].grid(alpha=0.3)
-        axes[idx].set_xlim(target_data.min() - 0.5, target_data.max() + 0.5)
+        axes[idx].set_xlim(data.min() - 0.5, data.max() + 0.5)
     plt.suptitle('Distribution Evolution', fontsize=14, y=1.00)
     plt.tight_layout()
-    plt.savefig(os.path.join(epoch_dir, 'dphi_distribution_evolution.png'))
+    plt.savefig(os.path.join(epoch_dir, 'variable' + str(dim_index) + '_distribution_evolution.png'))
     plt.close()
-
-    final_positions = sol[-1, :]
 
     # Plot 2: Final Comparison
     plt.figure(figsize=(8, 5))
     plt.hist(
-        target_data,
+        data,
         bins=50,
         density=True,
         alpha=0.5,
@@ -191,109 +195,244 @@ def save_evaluation_plots(
         color='cyan',
         label='Generated'
     )
-    plt.xlabel('dphi', fontsize=12)
+    plt.xlabel('variable' + str(dim_index), fontsize=12)
     plt.ylabel('Density', fontsize=12)
-    plt.xlim(target_data.min() - 0.5, target_data.max() + 0.5)
+    plt.xlim(data.min() - 0.5, data.max() + 0.5)
     plt.legend()
     plt.grid(alpha=0.3)
     plt.title(f'Comparison at Epoch {epoch}', fontsize=12)
-    plt.savefig(os.path.join(epoch_dir, 'final_comparison.png'))
+    plt.savefig(os.path.join(epoch_dir, 'variable' + str(dim_index) + '_final_comparison.png'), dpi=200)
     plt.close()
 
-def plot_flow_dynamics(
-        epoch,
-        model,
-        solver,
-        source_dist,
-        target_data,
-        device,
-        base_dir
-    ):
-    """Plots the flow dynamics including the velocity field and sample
-    trajectories.
+def correlation_plot_2d(
+    epoch,
+    target_data,
+    sol,
+    base_dir
+):
+    """Plots the 2D correlation between the two variables for target and generated data.
     """
     epoch_dir = os.path.join(base_dir, f"epoch_{epoch}")
     os.makedirs(epoch_dir, exist_ok=True)
 
-    # Create grid for velocity field
-    t_range = torch.linspace(0, 1, 20).to(device)
-    x_range = torch.linspace(target_data.min() - 1, target_data.max() + 1, 50).to(device)
-    T_grid, X_grid = torch.meshgrid(t_range, x_range, indexing='ij')
-    
-    with torch.no_grad():
-        v_pred = model(X_grid.reshape(-1, 1), T_grid.reshape(-1, 1))
-        V = v_pred.reshape(T_grid.shape).cpu().numpy()
+    gen_final = sol[-1]
 
-    # Generate sample trajectories
-    n_traj = 50
-    x_init = source_dist.sample((n_traj,)).unsqueeze(1).to(device)
-    t_eval = torch.linspace(0, 1, 100).to(device)
-    
-    with torch.no_grad():
-        trajectories = solver.sample(
-            time_grid=t_eval,
-            x_init=x_init,
-            method='dopri5',
-            step_size=None,
-            return_intermediates=True
-        )
-        trajectories = trajectories.cpu().numpy().squeeze()
+    plt.figure(figsize=(12, 5))
 
-    # Plotting
-    plt.figure(figsize=(12, 7))
-    t_np = t_range.cpu().numpy()
-    x_np = x_range.cpu().numpy()
-
-    # Compute max absolute velocity for normalization
-    v_max_abs = np.abs(V).max()
-
-    strm = plt.streamplot(
-        t_np,
-        x_np,
-        np.ones_like(V.T),
-        V.T,
-        color=V.T,
-        cmap='coolwarm',
-        norm=plt.Normalize(vmin=-v_max_abs, vmax=v_max_abs)
-        #alpha=0.3
+    # Target Data
+    plt.subplot(1, 2, 1)
+    plt.hist2d(
+        target_data[:, 0],
+        target_data[:, 1],
+        bins=50,
+        density=True,
+        cmap='Reds'
     )
-    
-    for i in range(n_traj):
-        plt.plot(
-            t_eval.cpu().numpy(),
-            trajectories[:, i],
-            color='black',
-            alpha=0.2,
-            lw=1
-        )
-    
-    plt.scatter(
-        np.ones(n_traj),
-        trajectories[-1, :],
-        color='red',
-        s=10,
-        label='Generated (t=1)',
-        zorder=5
-    )
-    plt.scatter(
-        np.zeros(n_traj),
-        trajectories[0, :],
-        color='blue',
-        s=10,
-        label='Source (t=0)',
-        zorder=5
-    )
+    plt.colorbar(label='Density')
+    plt.xlabel('phi1', fontsize=12)
+    plt.ylabel('phi2', fontsize=12)
+    plt.title('Target Data Correlation', fontsize=14)
+    plt.grid(alpha=0.3)
 
-    plt.title(f'Flow Dynamics & Velocity Field - Epoch {epoch}')
-    plt.xlabel('Time $t$')
-    plt.ylabel('Position $x$ (dphi)')
-    plt.xlim(-0.05, 1.05)
-    plt.colorbar(strm.lines, label='Velocity $v(x, t)$')
-    plt.legend()
-    plt.grid(alpha=0.2)
-    
-    plt.savefig(os.path.join(epoch_dir, 'flow_dynamics.png'), dpi=200)
+    # Generated Data
+    plt.subplot(1, 2, 2)
+    plt.hist2d(
+        gen_final[:, 0],
+        gen_final[:, 1],
+        bins=50,
+        density=True,
+        cmap='Blues'
+    )
+    plt.colorbar(label='Density')
+    plt.xlabel('phi1', fontsize=12)
+    plt.ylabel('phi2', fontsize=12)
+    plt.title('Generated Data Correlation', fontsize=14)
+    plt.grid(alpha=0.3)
+
+    plt.suptitle(f'Correlation Comparison at Epoch {epoch}', fontsize=16)
+    plt.tight_layout()
+    plt.savefig(os.path.join(epoch_dir, 'correlation_phi1_phi2.png'), dpi=200)
     plt.close()
+
+def plot_dphi_from_phi1phi2(
+    epoch,
+    target_data,
+    sol,
+    base_dir
+):
+    """Plots the dphi distribution derived from phi1 and phi2 data.
+    """
+    epoch_dir = os.path.join(base_dir, f"epoch_{epoch}")
+    os.makedirs(epoch_dir, exist_ok=True)
+
+    gen_final = sol[-1] # Shape: (N, 2)
+
+    dphi_data = target_data[:, 1] - target_data[:, 0]
+    dphi_gen = gen_final[:, 1] - gen_final[:, 0]
+    dphi_data = (dphi_data + np.pi) % (2 * np.pi) - np.pi
+    dphi_gen = (dphi_gen + np.pi) % (2 * np.pi) - np.pi
+
+
+    plt.figure(figsize=(8, 5))
+    plt.hist(
+        dphi_data,
+        bins=50,
+        density=True,
+        alpha=0.7,
+        color='red'
+    )
+    plt.hist(
+        dphi_gen,
+        bins=50,
+        density=True,
+        alpha=0.7,
+        color='cyan'
+    )
+    plt.xlabel('dphi', fontsize=12)
+    plt.ylabel('Density', fontsize=12)
+    plt.title(f'dphi Distribution at Epoch {epoch}', fontsize=14)
+    plt.grid(alpha=0.3)
+    plt.savefig(os.path.join(epoch_dir, 'dphi_distribution_from_phi1phi2.png'), dpi=200)
+    plt.close()
+
+# def save_evaluation_plots_2d(
+#         epoch, 
+#         sol, 
+#         T, 
+#         target_data, 
+#         base_dir
+#     ):
+#     """Saves 2D comparison plots for a specific epoch.
+#     """
+#     epoch_dir = os.path.join(base_dir, f"epoch_{epoch}")
+#     os.makedirs(epoch_dir, exist_ok=True)
+
+#     gen_final = sol[-1] # Shape: (N, 2)
+
+#     fig = plt.figure(figsize=(18, 6))
+    
+#     ax1 = fig.add_subplot(1, 2, 1)
+#     ax1.hist(target_data[:, 0], bins=50, density=True, alpha=0.5, label='Target', color='red')
+#     ax1.hist(gen_final[:, 0], bins=50, density=True, alpha=0.5, label='Generated', color='cyan')
+#     ax1.set_title(f'phi1 comparison at Epoch {epoch}', fontsize=12)
+#     ax1.set_xlabel('phi1')
+#     ax1.set_ylabel('density')
+#     ax1.legend()
+
+#     ax2 = fig.add_subplot(1, 2, 2)
+#     ax2.hist(target_data[:, 1], bins=50, density=True, alpha=0.5, label='Target', color='red')
+#     ax2.hist(gen_final[:, 1], bins=50, density=True, alpha=0.5, label='Generated', color='cyan')
+#     ax2.set_title(f'phi2 comparison at Epoch {epoch}', fontsize=12)
+#     ax2.set_xlabel('phi2')
+#     ax2.set_ylabel('density')
+#     ax2.legend()
+
+#     plt.savefig(os.path.join(epoch_dir, 'final_comparison_2d.png'), dpi=200)
+#     plt.close()
+
+#     # plot_dphi_from_phi1phi2(
+#     #     epoch,
+#     #     target_data[:, 0],
+#     #     target_data[:, 1],
+#     #     gen_final[:, 0],
+#     #     gen_final[:, 1],
+#     #     base_dir
+#     # )
+
+# def plot_flow_dynamics_1d(
+#         epoch,
+#         model,
+#         solver,
+#         source_dist,
+#         target_data,
+#         device,
+#         base_dir
+#     ):
+#     """Plots the flow dynamics including the velocity field and sample
+#     trajectories.
+#     """
+#     epoch_dir = os.path.join(base_dir, f"epoch_{epoch}")
+#     os.makedirs(epoch_dir, exist_ok=True)
+
+#     # Create grid for velocity field
+#     t_range = torch.linspace(0, 1, 20).to(device)
+#     x_range = torch.linspace(target_data.min() - 1, target_data.max() + 1, 50).to(device)
+#     T_grid, X_grid = torch.meshgrid(t_range, x_range, indexing='ij')
+    
+#     with torch.no_grad():
+#         v_pred = model(X_grid.reshape(-1, 1), T_grid.reshape(-1, 1))
+#         V = v_pred.reshape(T_grid.shape).cpu().numpy()
+
+#     # Generate sample trajectories
+#     n_traj = 50
+#     x_init = source_dist.sample((n_traj,)).unsqueeze(1).to(device)
+#     t_eval = torch.linspace(0, 1, 100).to(device)
+    
+#     with torch.no_grad():
+#         trajectories = solver.sample(
+#             time_grid=t_eval,
+#             x_init=x_init,
+#             method='dopri5',
+#             step_size=None,
+#             return_intermediates=True
+#         )
+#         trajectories = trajectories.cpu().numpy().squeeze()
+
+#     # Plotting
+#     plt.figure(figsize=(12, 7))
+#     t_np = t_range.cpu().numpy()
+#     x_np = x_range.cpu().numpy()
+
+#     # Compute max absolute velocity for normalization
+#     v_max_abs = np.abs(V).max()
+
+#     strm = plt.streamplot(
+#         t_np,
+#         x_np,
+#         np.ones_like(V.T),
+#         V.T,
+#         color=V.T,
+#         cmap='coolwarm',
+#         norm=plt.Normalize(vmin=-v_max_abs, vmax=v_max_abs)
+#         #alpha=0.3
+#     )
+    
+#     for i in range(n_traj):
+#         plt.plot(
+#             t_eval.cpu().numpy(),
+#             trajectories[:, i],
+#             color='black',
+#             alpha=0.2,
+#             lw=1
+#         )
+    
+#     plt.scatter(
+#         np.ones(n_traj),
+#         trajectories[-1, :],
+#         color='red',
+#         s=10,
+#         label='Generated (t=1)',
+#         zorder=5
+#     )
+#     plt.scatter(
+#         np.zeros(n_traj),
+#         trajectories[0, :],
+#         color='blue',
+#         s=10,
+#         label='Source (t=0)',
+#         zorder=5
+#     )
+
+#     plt.title(f'Flow Dynamics & Velocity Field - Epoch {epoch}')
+#     plt.xlabel('Time $t$')
+#     plt.ylabel('Position $x$ (dphi)')
+#     plt.xlim(-0.05, 1.05)
+#     plt.colorbar(strm.lines, label='Velocity $v(x, t)$')
+#     plt.legend()
+#     plt.grid(alpha=0.2)
+    
+#     plt.savefig(os.path.join(epoch_dir, 'flow_dynamics.png'), dpi=200)
+#     plt.close()
 
 def save_loss_and_metrics_plot(
         current_epoch,
@@ -307,9 +446,10 @@ def save_loss_and_metrics_plot(
         losses_train,
         losses_val,
         base_dir,
-        eval_name=None,
-        ma_n_metrics = 20,
-        ma_n_loss = 20
+        figname = 'loss_metrics_plots',
+        eval_name='',
+        ma_n_metrics = 10,
+        ma_n_loss = 10
     ):
     """Saves the evolution plot of loss and evaluation metrics.
     """
@@ -370,7 +510,7 @@ def save_loss_and_metrics_plot(
     axes[2].set_title('Evolution of KS p-value')
 
     # 3. Loss Plots
-    if eval_name is None:
+    if eval_name == '':
         iterations = range(len(losses_train))
     else:
         iterations = epochs
@@ -390,7 +530,7 @@ def save_loss_and_metrics_plot(
     axes[3].set_title('Evolution of Loss')
 
     plt.tight_layout()
-    plt.savefig(os.path.join(epoch_dir, 'loss_metrics_plots'+ eval_name +'.png'), dpi=200)
+    plt.savefig(os.path.join(epoch_dir, figname + eval_name +'.png'), dpi=200)
     plt.close()
 
 def create_experiment_summary(
@@ -404,6 +544,8 @@ def create_experiment_summary(
         epochs,
         bs,
         lr,
+        dataset_name="deltaphimoredata.npy",
+        data_target_var="dphi",
         step_size=None,
         gamma=None
     ):
@@ -417,10 +559,10 @@ def create_experiment_summary(
         f.write(f"Experiment Name: {name}\n")
         f.write("-" * 20 + "\n")
         f.write("DATASET INFO:\n")
-        f.write(f"Target File:         deltaphimoredata.npy\n")
+        f.write(f"Target File:         {dataset_name}\n")
         f.write(f"Dataset Size:        {dataset_size} samples\n")
         f.write(f"Train/Val Split:     80% / 20%\n")
-        f.write(f"Target Variable:     dphi\n")
+        f.write(f"Target Variable:     {data_target_var}\n")
         f.write("-" * 20 + "\n")
         f.write("MODEL ARCHITECTURE:\n")
         f.write(f"Type:                MLP\n")
@@ -456,12 +598,11 @@ def create_experiment_summary(
 
     print(f"--- Summary file created at: {summary_path} ---")
 
-def plot_train_val_dist(train_data, val_data, base_dir):
+def plot_train_val_dist(train_data, val_data, base_dir, namefig = 'train_val_split_check.png'):
     """Plots and saves the training and validation distribution comparison."
     """
     plt.figure(figsize=(10, 6))
     
-    # Usiamo density=True per confrontare le forme anche se il numero di campioni è diverso
     plt.hist(train_data, bins=50, density=True, alpha=0.5, color='tab:blue', label=f'Train ({len(train_data)} samples)')
     plt.hist(val_data, bins=50, density=True, alpha=0.5, color='tab:orange', label=f'Validation ({len(val_data)} samples)')
     
@@ -471,8 +612,7 @@ def plot_train_val_dist(train_data, val_data, base_dir):
     plt.legend()
     plt.grid(alpha=0.3)
     
-    # Salvataggio nella cartella principale degli esperimenti
-    save_path = os.path.join(base_dir, 'train_val_split_check.png')
+    save_path = os.path.join(base_dir, namefig)
     plt.savefig(save_path, dpi=200)
     plt.close()
 
@@ -541,7 +681,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--save_every",
         type=int,
-        default=500,
+        default=200,
         help="Save checkpoint every N epochs"
     )
     parser.add_argument(
@@ -569,35 +709,45 @@ if __name__ == "__main__":
     num_layers = args.num_layers
     hidden_dim = args.hidden_dim
 
-    # Define source distribution
-    if args.source_dist == "gaussian":
-        source_dist = torch.distributions.Normal(0.0, 1.0)
-    elif args.source_dist == "uniform":
-        source_dist = torch.distributions.Uniform(-3.0, 3.0)
-
     checkpoint_dir = f"checkpoints_{name}"
     os.makedirs(checkpoint_dir, exist_ok=True)
 
-    realistic_dataset = np.load("deltaphimoredata.npy")
-    dphi = realistic_dataset[:, 2]
+    # Load dataset
+    realistic_dataset = np.load("phi1_phi2.npy")
+    data = realistic_dataset[:, 2:4]
+    
+    # print(f"shape data: {data.shape}")
+    # print(f"first 5 samples:\n {data[:5, :]}")
 
     # Shuffle and split dataset
     seed_base = 5
     np.random.seed(seed_base)
-
-    indices = np.arange(len(dphi))
+    indices = np.arange(len(data))
     np.random.shuffle(indices)
-    dphi = dphi[indices]
+    data = data[indices]
 
-    ntrain = int(0.8 * len(dphi))
-    dphi_train = dphi[:ntrain]
-    dphi_val = dphi[ntrain:]
 
-    plot_train_val_dist(dphi_train, dphi_val, checkpoint_dir)
+    ntrain = int(0.8 * len(data))
+    data_train = data[:ntrain]
+    data_val = data[ntrain:]
+
+    for i in range(data_train.shape[1]):
+        plot_train_val_dist(data_train[:, i], data_val[:, i], checkpoint_dir, f"variable{i+1}_train_val_split.png")
+    
+    # Define source distribution N dimensional
+    if args.source_dist == "gaussian":
+        loc = torch.zeros(data.shape[1]).to(device)
+        covariance_matrix = torch.eye(data.shape[1]).to(device)
+        source_dist = torch.distributions.MultivariateNormal(loc, covariance_matrix)
+
+    elif args.source_dist == "uniform":
+        low = torch.full((data.shape[1],), -3.0).to(device)
+        high = torch.full((data.shape[1],), 3.0).to(device)
+        source_dist = torch.distributions.Uniform(low, high)
 
     # Initialize model, path, optimizer
     vf4 = MLP(
-        input_dim=1,
+        input_dim=data.shape[1],
         time_dim=1,
         hidden_dim=hidden_dim,
         num_layers=num_layers
@@ -623,7 +773,7 @@ if __name__ == "__main__":
     print(f"Model Parameters: {total_params}")
 
     if args.eval_only:
-        print("=== EVALUATION ONLY MODE ===")
+        print("EVALUATION ONLY MODE")
         # Find all checkpoints in the directory
         checkpoint_paths = []
         for root, dirs, files in os.walk(checkpoint_dir):
@@ -634,76 +784,124 @@ if __name__ == "__main__":
         # Sort numerically based on epoch number in filename
         checkpoint_paths.sort(key=lambda x: int(''.join(filter(str.isdigit, os.path.basename(x))) or 0))
         
-        checkpoint_paths = checkpoint_paths[::5]
+        # # Optionally, subsample checkpoints for quicker evaluation
+        # checkpoint_paths = checkpoint_paths[::5]
 
         # Histories for evaluation metrics
         losses_train_hist = []
         losses_val_hist = []
-        wasserstein_val_hist = []
-        wasserstein_train_hist = []
-        ks_stat_val_hist = []
-        ks_stat_train_hist = []
-        ks_pvalue_val_hist = []
-        ks_pvalue_train_hist = []
-        eval_epochs_hist = []
+        
+        w_val_hist_per_dim = [[] for _ in range(data_train.shape[1])]
+        w_train_hist_per_dim = [[] for _ in range(data_train.shape[1])]
+        ks_stat_val_hist_per_dim = [[] for _ in range(data_train.shape[1])]
+        ks_stat_train_hist_per_dim = [[] for _ in range(data_train.shape[1])]
+        ks_pval_val_hist_per_dim = [[] for _ in range(data_train.shape[1])]
+        ks_pval_train_hist_per_dim = [[] for _ in range(data_train.shape[1])]
 
+        eval_epochs_hist = []
+        
         for cp_path in checkpoint_paths:
             print(f"--- Processing Checkpoint: {cp_path} ---")
             checkpoint = torch.load(cp_path, map_location=device, weights_only=False)
             epoch = checkpoint['epoch']
-            
+
+            # Load model state
             vf4.load_state_dict(checkpoint['model_state_dict'])
             vf4.eval()
 
-            if 'loss_history_train' in checkpoint:
-                losses_train_hist.append(checkpoint['loss_history_train'][-1])
-            if 'loss_history_val' in checkpoint:
-                losses_val_hist.append(checkpoint['loss_history_val'][-1])
-            if 'w_history_val' in checkpoint:
-                wasserstein_val_hist.append(checkpoint['w_history_val'][-1])
-            if 'w_history_train' in checkpoint:
-                wasserstein_train_hist.append(checkpoint['w_history_train'][-1])
-            if 'ks_stat_history_val' in checkpoint:
-                ks_stat_val_hist.append(checkpoint['ks_stat_history_val'][-1])
-            if 'ks_stat_history_train' in checkpoint:
-                ks_stat_train_hist.append(checkpoint['ks_stat_history_train'][-1])
-            if 'ks_pvalue_history_val' in checkpoint:
-                ks_pvalue_val_hist.append(checkpoint['ks_pvalue_history_val'][-1])
-            if 'ks_pvalue_history_train' in checkpoint:
-                ks_pvalue_train_hist.append(checkpoint['ks_pvalue_history_train'][-1])
+            # Generate samples and evaluate
+            with torch.no_grad():
+                n_samples_eval = 50000 
+                x_init_eval = source_dist.sample((n_samples_eval,)).to(device)
+                if args.clamp:
+                    x_init_eval = torch.clamp(x_init_eval, -3.0, 3.0)
+                
+                wrapped_model_eval = WrappedModel(vf4)
+                solver_eval = ODESolver(velocity_model=wrapped_model_eval)
+                T_eval = torch.linspace(0, 1, 100).to(device)
+
+                sol_eval = solver_eval.sample(
+                    time_grid=T_eval,
+                    x_init=x_init_eval,
+                    method='dopri5',
+                    return_intermediates=True
+                )
+                sol = sol_eval.cpu().numpy()
+
             eval_epochs_hist.append(epoch)
 
-        save_loss_and_metrics_plot(
-            epoch,
-            eval_epochs_hist,
-            wasserstein_val_hist,
-            wasserstein_train_hist,
-            ks_stat_val_hist,
-            ks_stat_train_hist,
-            ks_pvalue_val_hist,
-            ks_pvalue_train_hist,
-            losses_train_hist,
-            losses_val_hist,
-            checkpoint_dir,
-            eval_name="_evalonly"
-        )
-        print("=== EVALUATION COMPLETED ===")
+            losses_train_hist.append(checkpoint.get('loss_history_train', [0])[-1])
+            losses_val_hist.append(checkpoint.get('loss_history_val', [0])[-1])
+
+            for i in range(data_train.shape[1]):
+                # Wasserstein
+                if 'w_history_val' in checkpoint:
+                    w_val_hist_per_dim[i].append(checkpoint['w_history_val'][i][-1])
+                if 'w_history_train' in checkpoint:
+                    w_train_hist_per_dim[i].append(checkpoint['w_history_train'][i][-1])
+                
+                # KS Statistic
+                if 'ks_stat_history_val' in checkpoint:
+                    ks_stat_val_hist_per_dim[i].append(checkpoint['ks_stat_history_val'][i][-1])
+                if 'ks_stat_history_train' in checkpoint:
+                    ks_stat_train_hist_per_dim[i].append(checkpoint['ks_stat_history_train'][i][-1])
+                
+                # KS p-value
+                if 'ks_pvalue_history_val' in checkpoint:
+                    ks_pval_val_hist_per_dim[i].append(checkpoint['ks_pvalue_history_val'][i][-1])
+                if 'ks_pvalue_history_train' in checkpoint:
+                    ks_pval_train_hist_per_dim[i].append(checkpoint['ks_pvalue_history_train'][i][-1])
+            
+        # After processing all checkpoints, save plots for the last epoch
+        for i in range(data_train.shape[1]):
+            save_loss_and_metrics_plot(
+                current_epoch=eval_epochs_hist[-1],
+                epochs=eval_epochs_hist,
+                w_history_val=w_val_hist_per_dim[i],
+                w_history_train=w_train_hist_per_dim[i],
+                ks_history_val=ks_stat_val_hist_per_dim[i],
+                ks_history_train=ks_stat_train_hist_per_dim[i],
+                ks_pvalue_history_val=ks_pval_val_hist_per_dim[i],
+                ks_pvalue_history_train=ks_pval_train_hist_per_dim[i],
+                losses_train=losses_train_hist,
+                losses_val=losses_val_hist,
+                base_dir=checkpoint_dir,
+                figname=f'loss_metrics_plots_variable{i+1}',
+                eval_name="_evalonly"
+            )
+            save_evaluation_plots(
+                    epoch,
+                    sol,
+                    T_eval.cpu(),
+                    data_val,
+                    checkpoint_dir,
+                    dim_index=i
+                )
+        
+            
+            plot_dphi_from_phi1phi2(epoch, data_val, sol, checkpoint_dir)
+        correlation_plot_2d(epoch, data_val, sol, checkpoint_dir)
+
+
+        print("EVALUATION COMPLETED")
 
     else:
-        print("=== TRAINING MODE ===")
+        print("TRAINING MODE")
 
         # Create summary file
         create_experiment_summary(
             checkpoint_dir,
             name,
             args,
-            len(dphi),
+            len(data),
             total_params,
             hidden_dim,
             num_layers,
             epochs,
             bs,
             lr,
+            "phi1_phi2.npy",
+            "phi1 and phi2",
             step_size if not LRfixed else None,
             gamma if not LRfixed else None
         )
@@ -711,20 +909,19 @@ if __name__ == "__main__":
         # Lists for tracking losses
         losses_train = []
         losses_val = []
-        # Histories for evaluation metrics
-        wasserstein_history_train = []
-        wasserstein_history_val = []
 
-        ks_stat_history_train = []
-        ks_stat_history_val = []
+        # Histories for evaluation metrics (list of lists for each variable)
+        w_hist_train = [[] for _ in range(data_train.shape[1])]
+        w_hist_val   = [[] for _ in range(data_train.shape[1])]
 
-        ks_pvalue_history_train = []
-        ks_pvalue_history_val = []
+        ks_stat_hist_train = [[] for _ in range(data_train.shape[1])]
+        ks_stat_hist_val   = [[] for _ in range(data_train.shape[1])]
+
+        ks_pval_hist_train = [[] for _ in range(data_train.shape[1])]
+        ks_pval_hist_val   = [[] for _ in range(data_train.shape[1])]
+
         eval_epochs = []
 
-        #############################################
-        # DA SISTEMARE
-        #############################################
         # Resume from checkpoint if specified
         start_epoch = 0
         if args.resume and os.path.isfile(args.resume):
@@ -734,18 +931,25 @@ if __name__ == "__main__":
             vf4.load_state_dict(checkpoint['model_state_dict'])
             optim4.load_state_dict(checkpoint['optimizer_state_dict'])
             start_epoch = checkpoint['epoch'] + 1
-            
-            if 'loss_history' in checkpoint:
-                losses_train = checkpoint['loss_history']
 
-            if 'w_history' in checkpoint:
-                wasserstein_history_val = checkpoint['w_history']
-            if 'ks_stat_history' in checkpoint:
-                ks_stat_history = checkpoint['ks_stat_history']
-            if 'ks_pvalue_history_val' in checkpoint:
-                ks_pvalue_history_val = checkpoint['ks_pvalue_history_val']
-            if 'eval_epochs' in checkpoint:
-                eval_epochs = checkpoint['eval_epochs']
+            for param_group in optim4.param_groups:
+                param_group['lr'] = args.lr  
+            print(f"--- New learning rate: {args.lr} ---")
+            # --------------------------------------------------
+
+            losses_train = checkpoint.get('loss_history_train', [])
+            losses_val = checkpoint.get('loss_history_val', [])
+
+            w_hist_train = checkpoint.get('w_history_train', w_hist_train)
+            w_hist_val   = checkpoint.get('w_history_val', w_hist_val)
+
+            ks_stat_hist_train = checkpoint.get('ks_stat_history_train', ks_stat_hist_train)
+            ks_stat_hist_val   = checkpoint.get('ks_stat_history_val', ks_stat_hist_val)
+
+            ks_pval_hist_train = checkpoint.get('ks_pvalue_history_train', ks_pval_hist_train)
+            ks_pval_hist_val   = checkpoint.get('ks_pvalue_history_val', ks_pval_hist_val)
+
+            eval_epochs = checkpoint.get('eval_epochs', [])
 
             if not LRfixed:
                 for _ in range(start_epoch):
@@ -753,13 +957,11 @@ if __name__ == "__main__":
                     
             print(f"--- Resuming from epoch {start_epoch} ---")
 
-        #############################################
-
         # Create a custom sampler for dphi distribution
-        dphi_train_tensor = torch.from_numpy(dphi_train).float()
+        data_train_tensor = torch.from_numpy(data_train).float()
 
         # Create a DataLoader over the full dataset and iterate in batches
-        dataset = torch.utils.data.TensorDataset(dphi_train_tensor.unsqueeze(1))
+        dataset = torch.utils.data.TensorDataset(data_train_tensor)
 
         for epoch in range(start_epoch, epochs):
             torch.manual_seed(seed_base + epoch) # For reproducibility also when restart the training from a checkpoint 
@@ -783,18 +985,18 @@ if __name__ == "__main__":
                 optim4.zero_grad()
                 
                 # Batch from dataset
-                x_1 = batch[0].to(device) # shape (batch_curr, 1)
+                x_1 = batch[0].to(device) # shape (batch_curr, 2)
                 batch_curr = x_1.size(0)
                 
                 # Start samples and times sized to current batch
-                x_0 = source_dist.sample((batch_curr,)).unsqueeze(1).to(device)
+                x_0 = source_dist.sample((batch_curr,)).to(device) # ho tolto un unsqueeze(1) per avere shape (batch_curr, 2)
                 if args.clamp == True:
                     x_0 = torch.clamp(x_0, -3.0, 3.0) # Clamp for uniform distribution
 
-                t = torch.rand(batch_curr).to(device) # Uniform(0, 1) times
+                t = torch.rand(batch_curr, 1).to(device) # Uniform(0, 1) times
                 
                 # Sample probability path
-                path_sample = path.sample(t=t, x_0=x_0, x_1=x_1)
+                path_sample = path.sample(t=t.flatten(), x_0=x_0, x_1=x_1)
                 out = vf4(path_sample.x_t, path_sample.t)
                 
                 # Flow matching loss
@@ -810,17 +1012,17 @@ if __name__ == "__main__":
             # Validation loss computation
             vf4.eval()
             with torch.no_grad():
-                x_1_v = torch.from_numpy(dphi_val).float().unsqueeze(1).to(device)
-                x_0_v = source_dist.sample((x_1_v.size(0),)).unsqueeze(1).to(device)
+                x_1_v = torch.from_numpy(data_val).float().to(device)
+                x_0_v = source_dist.sample((x_1_v.size(0),)).to(device)
                 if args.clamp: 
                     x_0_v = torch.clamp(x_0_v, -3.0, 3.0)
-                
-                t_v = torch.rand(x_1_v.size(0)).to(device)
-                path_v = path.sample(t=t_v, x_0=x_0_v, x_1=x_1_v)
+
+                t_v = torch.rand(x_1_v.size(0), 1).to(device)
+                path_v = path.sample(t=t_v.flatten(), x_0=x_0_v, x_1=x_1_v)
                 
                 out_v = vf4(path_v.x_t, path_v.t)
                 v_loss_val = torch.pow(out_v - path_v.dx_t, 2).mean().item()
-                losses_val.append(v_loss_val) # Questa lista ora cresce ad ogni epoca
+                losses_val.append(v_loss_val)
             vf4.train()
 
             if not LRfixed:
@@ -836,7 +1038,7 @@ if __name__ == "__main__":
                 vf4.eval()
                 with torch.no_grad():
                     n_samples_eval = 50000 
-                    x_init_eval = source_dist.sample((n_samples_eval,)).unsqueeze(1).to(device)
+                    x_init_eval = source_dist.sample((n_samples_eval,)).to(device)
                     if args.clamp:
                         x_init_eval = torch.clamp(x_init_eval, -3.0, 3.0)
                     
@@ -844,6 +1046,7 @@ if __name__ == "__main__":
                     solver_eval = ODESolver(velocity_model=wrapped_model_eval)
                 
                     T_eval = torch.linspace(0, 1, 100).to(device)
+
                     sol_eval = solver_eval.sample(
                         time_grid=T_eval,
                         x_init=x_init_eval,
@@ -852,24 +1055,28 @@ if __name__ == "__main__":
                         return_intermediates=True
                         )
 
-                    sol = sol_eval.cpu().numpy().squeeze() # reshape(len(T_eval), -1)
-                    final_pos = sol_eval[-1].cpu().numpy().flatten() # For metric computation I need only solver at final time   
+                    sol = sol_eval.cpu().numpy()
+                    final_pos = sol[-1] # For metric computation I need only solver at final time   
 
-                    # Compute Wasserstein distance
-                    w_dist_val = stats.wasserstein_distance(dphi_val, final_pos)
-                    w_dist_train = stats.wasserstein_distance(dphi_train, final_pos)
-                    # Compute Kolmogorov-Smirnov statistic
-                    ks_stat_val, ks_pvalue_val = stats.ks_2samp(dphi_val, final_pos)
-                    ks_stat_train, ks_pvalue_train = stats.ks_2samp(dphi_train, final_pos)
+                    # Compute wasserstein distance and KS statistic
+                    for i in range(data_train.shape[1]):
+                        # Wasserstein
+                        w_train = stats.wasserstein_distance(data_train[:, i], final_pos[:, i])
+                        w_val   = stats.wasserstein_distance(data_val[:, i], final_pos[:, i])
+                        
+                        w_hist_train[i].append(w_train)
+                        w_hist_val[i].append(w_val)
+                        
+                        # Kolmogorov-Smirnov (Training)
+                        ks_s_t, ks_p_t = stats.ks_2samp(data_train[:, i], final_pos[:, i])
+                        ks_stat_hist_train[i].append(ks_s_t)
+                        ks_pval_hist_train[i].append(ks_p_t)
+                        
+                        # Kolmogorov-Smirnov (Validation)
+                        ks_s_v, ks_p_v = stats.ks_2samp(data_val[:, i], final_pos[:, i])
+                        ks_stat_hist_val[i].append(ks_s_v)
+                        ks_pval_hist_val[i].append(ks_p_v)
                     
-                    wasserstein_history_val.append(w_dist_val)
-                    wasserstein_history_train.append(w_dist_train)
-
-                    ks_stat_history_val.append(ks_stat_val)
-                    ks_stat_history_train.append(ks_stat_train)
-
-                    ks_pvalue_history_val.append(ks_pvalue_val)
-                    ks_pvalue_history_train.append(ks_pvalue_train)
                     eval_epochs.append(epoch)
 
                 # Logging metrics
@@ -895,12 +1102,12 @@ if __name__ == "__main__":
                     'optimizer_state_dict': optim4.state_dict(),
                     'loss_history_train': losses_train,
                     'loss_history_val': losses_val,
-                    'w_history_val': wasserstein_history_val,
-                    'ks_stat_history_val': ks_stat_history_val,
-                    'ks_pvalue_history_val': ks_pvalue_history_val,
-                    'w_history_train': wasserstein_history_train,
-                    'ks_stat_history_train': ks_stat_history_train,
-                    'ks_pvalue_history_train': ks_pvalue_history_train,
+                    'w_history_train': w_hist_train,
+                    'w_history_val': w_hist_val,
+                    'ks_stat_history_train': ks_stat_hist_train,
+                    'ks_stat_history_val': ks_stat_hist_val,
+                    'ks_pvalue_history_train': ks_pval_hist_train,
+                    'ks_pvalue_history_val': ks_pval_hist_val,
                     'eval_epochs': eval_epochs
                 }
                 if not LRfixed:
@@ -910,48 +1117,51 @@ if __name__ == "__main__":
                 print(f"--- Checkpoint saved: {checkpoint_path} ---")
 
                 # Generate evaluation plots
-                save_evaluation_plots(
+                for i in range(data_train.shape[1]):
+                    save_evaluation_plots(
+                        epoch,
+                        sol,
+                        T_eval.cpu(),
+                        data_val,
+                        checkpoint_dir,
+                        dim_index=i
+                    )
+                correlation_plot_2d(
                     epoch,
+                    data_val,
                     sol,
-                    T_eval.cpu(),
-                    dphi_val,
                     checkpoint_dir
                 )
+                plot_dphi_from_phi1phi2(
+                    epoch,
+                    data_val,
+                    sol,
+                    checkpoint_dir
+                )
+                
                 print(f"--- Evaluation plots saved for epoch {epoch} ---")
 
-                # Flow dynamics plot
-                wrapped_model = WrappedModel(vf4)
-                solver = ODESolver(velocity_model=wrapped_model)
-                plot_flow_dynamics(
-                    epoch,
-                    vf4,
-                    solver,
-                    source_dist,
-                    dphi_val,
-                    device,
-                    checkpoint_dir
-                )
-                print(f"--- Flow dynamics plot saved for epoch {epoch} ---")
-                
                 vf4.train() # Return to training mode
 
                 # 4. Updated Loss and metrics Plot Generation
-                save_loss_and_metrics_plot(
-                    epoch,
-                    eval_epochs,
-                    wasserstein_history_val,
-                    wasserstein_history_train,
-                    ks_stat_history_val,
-                    ks_stat_history_train,
-                    ks_pvalue_history_val,
-                    ks_pvalue_history_train,
-                    losses_train,
-                    losses_val,
-                    checkpoint_dir
-                    )
+                for i in range(data_train.shape[1]):
+                    save_loss_and_metrics_plot(
+                        epoch,
+                        eval_epochs,
+                        w_hist_val[i],
+                        w_hist_train[i],
+                        ks_stat_hist_val[i],
+                        ks_stat_hist_train[i],
+                        ks_pval_hist_val[i],
+                        ks_pval_hist_train[i],
+                        losses_train,
+                        losses_val,
+                        checkpoint_dir,
+                        figname = 'loss_metrics_plots_variable' + str(i+1)
+                        )
                 print(f"--- Loss and metrics evolution plot saved for epoch {epoch} ---")
 
             # Remove references to batch tensors to free memory at the end of each epoch
             del batch, x_1, x_0, t, out, loss
             torch.cuda.empty_cache()
-        print(f"=== TRAINING COMPLETED in {get_elapsed_time(global_start_time)} ===")
+        print(f"TRAINING COMPLETED in {get_elapsed_time(global_start_time)}")
