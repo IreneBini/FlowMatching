@@ -47,6 +47,7 @@ import numpy as np
 import os
 import time
 import torch
+import torch.nn.functional as F
 
 from flow_matching.path.scheduler import CondOTScheduler
 from flow_matching.path import AffineProbPath
@@ -590,6 +591,7 @@ def create_experiment_summary(
         f.write(f"LR Strategy:         {'Fixed' if args.variable_lr == False else 'StepLR'}\n")
         if not args.variable_lr:
             f.write(f"Scheduler Params:    StepSize={step_size}, Gamma={gamma}\n")
+        f.write(f"Loss Function:       Flow Matching (MSE {'+ Cosine Similarity' if args.cosine_similarity_loss else ''})\n")
         f.write("-" * 20 + "\n")
         f.write("EVALUATION CONFIG (In-Training):\n")
         f.write("ODE Solver:          dopri5\n")
@@ -696,6 +698,11 @@ if __name__ == "__main__":
         default=128,
         help="Hidden dimension of the MLP"
     )
+    parser.add_argument(
+        "--cosine_similarity_loss",
+        action="store_true",
+        help="If set, uses cosine similarity loss sum with MSE loss"
+    )
 
     args = parser.parse_args()
 
@@ -708,6 +715,8 @@ if __name__ == "__main__":
     save_every = args.save_every
     num_layers = args.num_layers
     hidden_dim = args.hidden_dim
+
+    cos_sim = args.cosine_similarity_loss
 
     checkpoint_dir = f"checkpoints_{name}"
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -926,36 +935,52 @@ if __name__ == "__main__":
         start_epoch = 0
         if args.resume and os.path.isfile(args.resume):
             print(f"--- Loading checkpoint: {args.resume} ---")
-            checkpoint = torch.load(args.resume, map_location=device)
+            checkpoint = torch.load(args.resume, map_location=device, weights_only=False)
             
+            # load model and optimizer states
             vf4.load_state_dict(checkpoint['model_state_dict'])
             optim4.load_state_dict(checkpoint['optimizer_state_dict'])
-            start_epoch = checkpoint['epoch'] + 1
-
+            
+            # Override learning rate
             for param_group in optim4.param_groups:
-                param_group['lr'] = args.lr  
-            print(f"--- New learning rate: {args.lr} ---")
-            # --------------------------------------------------
-
+                param_group['lr'] = args.lr
+            
+            start_epoch = checkpoint['epoch'] + 1
             losses_train = checkpoint.get('loss_history_train', [])
             losses_val = checkpoint.get('loss_history_val', [])
-
-            w_hist_train = checkpoint.get('w_history_train', w_hist_train)
-            w_hist_val   = checkpoint.get('w_history_val', w_hist_val)
-
-            ks_stat_hist_train = checkpoint.get('ks_stat_history_train', ks_stat_hist_train)
-            ks_stat_hist_val   = checkpoint.get('ks_stat_history_val', ks_stat_hist_val)
-
-            ks_pval_hist_train = checkpoint.get('ks_pvalue_history_train', ks_pval_hist_train)
-            ks_pval_hist_val   = checkpoint.get('ks_pvalue_history_val', ks_pval_hist_val)
-
             eval_epochs = checkpoint.get('eval_epochs', [])
 
+            input_dim = data_train.shape[1]
+            
+            # Mappatura delle metriche da gestire
+            metrics_map = {
+                'w_history_train': w_hist_train,
+                'w_history_val': w_hist_val,
+                'ks_stat_history_train': ks_stat_hist_train,
+                'ks_stat_history_val': ks_stat_hist_val,
+                'ks_pvalue_history_train': ks_pval_hist_train,
+                'ks_pvalue_history_val': ks_pval_hist_val
+            }
+
+            for key_new, target_list in metrics_map.items():
+                if key_new in checkpoint:
+                    temp_data = checkpoint[key_new]
+                    for i in range(min(len(temp_data), input_dim)):
+                        target_list[i] = temp_data[i]
+                else:
+                    for i in range(input_dim):
+                        legacy_key = f"{key_new}_{i}"
+                        if legacy_key in checkpoint:
+                            target_list[i] = checkpoint[legacy_key]
+
             if not LRfixed:
-                for _ in range(start_epoch):
-                    scheduler.step()
+                if 'scheduler_state_dict' in checkpoint:
+                    scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                else:
+                    for _ in range(start_epoch):
+                        scheduler.step()
                     
-            print(f"--- Resuming from epoch {start_epoch} ---")
+            print(f"--- Resumed from epoch {start_epoch} with LR={args.lr} ---")
 
         # Create a custom sampler for dphi distribution
         data_train_tensor = torch.from_numpy(data_train).float()
@@ -1000,8 +1025,15 @@ if __name__ == "__main__":
                 out = vf4(path_sample.x_t, path_sample.t)
                 
                 # Flow matching loss
-                loss = torch.pow(out - path_sample.dx_t, 2).mean()
-                
+                loss_cfm = torch.pow(out - path_sample.dx_t, 2).mean()
+
+                if cos_sim:
+                    cos_sim = F.cosine_similarity(out, path_sample.dx_t, dim=1, eps=1e-8)
+                    loss_sim = (1.0 - cos_sim).mean()
+                    loss = loss_cfm + loss_sim
+                else:
+                    loss = loss_cfm
+
                 # Optimizer step
                 loss.backward()
                 optim4.step()
@@ -1010,9 +1042,9 @@ if __name__ == "__main__":
                 num_batches += 1
 
             # Validation loss computation
+            x_1_v = torch.from_numpy(data_val).float().to(device)
             vf4.eval()
             with torch.no_grad():
-                x_1_v = torch.from_numpy(data_val).float().to(device)
                 x_0_v = source_dist.sample((x_1_v.size(0),)).to(device)
                 if args.clamp: 
                     x_0_v = torch.clamp(x_0_v, -3.0, 3.0)
@@ -1021,8 +1053,14 @@ if __name__ == "__main__":
                 path_v = path.sample(t=t_v.flatten(), x_0=x_0_v, x_1=x_1_v)
                 
                 out_v = vf4(path_v.x_t, path_v.t)
-                v_loss_val = torch.pow(out_v - path_v.dx_t, 2).mean().item()
-                losses_val.append(v_loss_val)
+                v_loss_cfm = torch.pow(out_v - path_v.dx_t, 2).mean().item()
+                if cos_sim:
+                    v_loss_sim = (1.0 - F.cosine_similarity(out_v, path_v.dx_t, dim=1, eps=1e-8)).mean().item()
+                    v_loss = v_loss_cfm + v_loss_sim
+                else:
+                    v_loss = v_loss_cfm
+                losses_val.append(v_loss)
+
             vf4.train()
 
             if not LRfixed:
