@@ -255,6 +255,16 @@ def correlation_plot_2d(
     plt.savefig(os.path.join(epoch_dir, 'correlation_phi1_phi2.png'), dpi=200)
     plt.close()
 
+def compute_dphi(
+    phi1, 
+    phi2
+):
+    """Computes the dphi value given phi1 and phi2.
+    """
+    dphi = phi2 - phi1
+    dphi = (dphi + np.pi) % (2 * np.pi) - np.pi
+    return dphi
+
 def plot_dphi_from_phi1phi2(
     epoch,
     target_data,
@@ -268,10 +278,8 @@ def plot_dphi_from_phi1phi2(
 
     gen_final = sol[-1] # Shape: (N, 2)
 
-    dphi_data = target_data[:, 1] - target_data[:, 0]
-    dphi_gen = gen_final[:, 1] - gen_final[:, 0]
-    dphi_data = (dphi_data + np.pi) % (2 * np.pi) - np.pi
-    dphi_gen = (dphi_gen + np.pi) % (2 * np.pi) - np.pi
+    dphi_data = compute_dphi(target_data[:, 0], target_data[:, 1])
+    dphi_gen = compute_dphi(gen_final[:, 0], gen_final[:, 1])
 
 
     plt.figure(figsize=(8, 5))
@@ -457,6 +465,10 @@ def save_loss_and_metrics_plot(
     epoch_dir = os.path.join(base_dir, f"epoch_{current_epoch}")
     os.makedirs(epoch_dir, exist_ok=True)
 
+    if len(epochs) != len(w_history_val):
+        nn = len(epochs) - len(w_history_val)
+        epochs = epochs[nn:]
+
     fig, axes = plt.subplots(2, 2, figsize=(18, 10)) 
     axes = axes.flatten()
     
@@ -589,9 +601,9 @@ def create_experiment_summary(
         f.write(f"Dynamic Batching:    Full-dataset after epoch 2\n")
         f.write(f"Optimizer:           Adam (lr={lr})\n")
         f.write(f"LR Strategy:         {'Fixed' if args.variable_lr == False else 'StepLR'}\n")
-        if not args.variable_lr:
+        if args.variable_lr:
             f.write(f"Scheduler Params:    StepSize={step_size}, Gamma={gamma}\n")
-        f.write(f"Loss Function:       Flow Matching (MSE {'+ Cosine Similarity' if args.cosine_similarity_loss else ''})\n")
+        f.write(f"Loss Function:       MSE {'+ Cosine Similarity' if args.cosine_similarity_loss else ''}\n")
         f.write("-" * 20 + "\n")
         f.write("EVALUATION CONFIG (In-Training):\n")
         f.write("ODE Solver:          dopri5\n")
@@ -716,7 +728,7 @@ if __name__ == "__main__":
     num_layers = args.num_layers
     hidden_dim = args.hidden_dim
 
-    cos_sim = args.cosine_similarity_loss
+    cos_sim_check = args.cosine_similarity_loss
 
     checkpoint_dir = f"checkpoints_{name}"
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -769,7 +781,7 @@ if __name__ == "__main__":
     else:
         print("Using variable learning rate schedule.")
         # scheduler parameters
-        step_size = 100 # LR decrease every 100 epochs
+        step_size = 10000 # LR decrease every 100 epochs
         gamma = 0.5 # LR decrease factor
         scheduler = torch.optim.lr_scheduler.StepLR(
             optim4,
@@ -780,6 +792,26 @@ if __name__ == "__main__":
     # print model parameters count
     total_params = sum(p.numel() for p in vf4.parameters())
     print(f"Model Parameters: {total_params}")
+
+    # Histories for evaluation metrics
+    losses_train = []
+    losses_val = []
+    
+    w_val_hist = [[] for _ in range(data_train.shape[1])]
+    w_train_hist = [[] for _ in range(data_train.shape[1])]
+    ks_stat_val_hist = [[] for _ in range(data_train.shape[1])]
+    ks_stat_train_hist = [[] for _ in range(data_train.shape[1])]
+    ks_pval_val_hist = [[] for _ in range(data_train.shape[1])]
+    ks_pval_train_hist = [[] for _ in range(data_train.shape[1])]
+
+    w_val_hist_dphi = []
+    w_train_hist_dphi = []
+    ks_stat_val_hist_dphi = []
+    ks_stat_train_hist_dphi = []
+    ks_pval_val_hist_dphi = []
+    ks_pval_train_hist_dphi = []
+
+    eval_epochs = []
 
     if args.eval_only:
         print("EVALUATION ONLY MODE")
@@ -795,19 +827,6 @@ if __name__ == "__main__":
         
         # # Optionally, subsample checkpoints for quicker evaluation
         # checkpoint_paths = checkpoint_paths[::5]
-
-        # Histories for evaluation metrics
-        losses_train_hist = []
-        losses_val_hist = []
-        
-        w_val_hist_per_dim = [[] for _ in range(data_train.shape[1])]
-        w_train_hist_per_dim = [[] for _ in range(data_train.shape[1])]
-        ks_stat_val_hist_per_dim = [[] for _ in range(data_train.shape[1])]
-        ks_stat_train_hist_per_dim = [[] for _ in range(data_train.shape[1])]
-        ks_pval_val_hist_per_dim = [[] for _ in range(data_train.shape[1])]
-        ks_pval_train_hist_per_dim = [[] for _ in range(data_train.shape[1])]
-
-        eval_epochs_hist = []
         
         for cp_path in checkpoint_paths:
             print(f"--- Processing Checkpoint: {cp_path} ---")
@@ -837,43 +856,61 @@ if __name__ == "__main__":
                 )
                 sol = sol_eval.cpu().numpy()
 
-            eval_epochs_hist.append(epoch)
+            eval_epochs.append(epoch)
 
-            losses_train_hist.append(checkpoint.get('loss_history_train', [0])[-1])
-            losses_val_hist.append(checkpoint.get('loss_history_val', [0])[-1])
+            losses_train.append(checkpoint.get('loss_history_train', [0])[-1])
+            losses_val.append(checkpoint.get('loss_history_val', [0])[-1])
 
             for i in range(data_train.shape[1]):
                 # Wasserstein
                 if 'w_history_val' in checkpoint:
-                    w_val_hist_per_dim[i].append(checkpoint['w_history_val'][i][-1])
+                    w_val_hist[i].append(checkpoint['w_history_val'][i][-1])
                 if 'w_history_train' in checkpoint:
-                    w_train_hist_per_dim[i].append(checkpoint['w_history_train'][i][-1])
+                    w_train_hist[i].append(checkpoint['w_history_train'][i][-1])
                 
                 # KS Statistic
                 if 'ks_stat_history_val' in checkpoint:
-                    ks_stat_val_hist_per_dim[i].append(checkpoint['ks_stat_history_val'][i][-1])
+                    ks_stat_val_hist[i].append(checkpoint['ks_stat_history_val'][i][-1])
                 if 'ks_stat_history_train' in checkpoint:
-                    ks_stat_train_hist_per_dim[i].append(checkpoint['ks_stat_history_train'][i][-1])
+                    ks_stat_train_hist[i].append(checkpoint['ks_stat_history_train'][i][-1])
                 
                 # KS p-value
                 if 'ks_pvalue_history_val' in checkpoint:
-                    ks_pval_val_hist_per_dim[i].append(checkpoint['ks_pvalue_history_val'][i][-1])
+                    ks_pval_val_hist[i].append(checkpoint['ks_pvalue_history_val'][i][-1])
                 if 'ks_pvalue_history_train' in checkpoint:
-                    ks_pval_train_hist_per_dim[i].append(checkpoint['ks_pvalue_history_train'][i][-1])
+                    ks_pval_train_hist[i].append(checkpoint['ks_pvalue_history_train'][i][-1])
+
+
+            if 'w_history_val_dphi' in checkpoint:
+                w_val_hist_dphi.append(checkpoint['w_history_val_dphi'][-1])
+            if 'w_history_train_dphi' in checkpoint:
+                w_train_hist_dphi.append(checkpoint['w_history_train_dphi'][-1])
             
+            # KS Statistic dphi
+            if 'ks_stat_history_val_dphi' in checkpoint:
+                ks_stat_val_hist_dphi.append(checkpoint['ks_stat_history_val_dphi'][-1])
+            if 'ks_stat_history_train_dphi' in checkpoint:
+                ks_stat_train_hist_dphi.append(checkpoint['ks_stat_history_train_dphi'][-1])
+            
+            # KS p-value dphi
+            if 'ks_pvalue_history_val_dphi' in checkpoint:
+                ks_pval_val_hist_dphi.append(checkpoint['ks_pvalue_history_val_dphi'][-1])
+            if 'ks_pvalue_history_train_dphi' in checkpoint:
+                ks_pval_train_hist_dphi.append(checkpoint['ks_pvalue_history_train_dphi'][-1])
+
         # After processing all checkpoints, save plots for the last epoch
         for i in range(data_train.shape[1]):
             save_loss_and_metrics_plot(
-                current_epoch=eval_epochs_hist[-1],
-                epochs=eval_epochs_hist,
-                w_history_val=w_val_hist_per_dim[i],
-                w_history_train=w_train_hist_per_dim[i],
-                ks_history_val=ks_stat_val_hist_per_dim[i],
-                ks_history_train=ks_stat_train_hist_per_dim[i],
-                ks_pvalue_history_val=ks_pval_val_hist_per_dim[i],
-                ks_pvalue_history_train=ks_pval_train_hist_per_dim[i],
-                losses_train=losses_train_hist,
-                losses_val=losses_val_hist,
+                current_epoch=eval_epochs[-1],
+                epochs=eval_epochs,
+                w_history_val=w_val_hist[i],
+                w_history_train=w_train_hist[i],
+                ks_history_val=ks_stat_val_hist[i],
+                ks_history_train=ks_stat_train_hist[i],
+                ks_pvalue_history_val=ks_pval_val_hist[i],
+                ks_pvalue_history_train=ks_pval_train_hist[i],
+                losses_train=losses_train,
+                losses_val=losses_val,
                 base_dir=checkpoint_dir,
                 figname=f'loss_metrics_plots_variable{i+1}',
                 eval_name="_evalonly"
@@ -887,8 +924,23 @@ if __name__ == "__main__":
                     dim_index=i
                 )
         
-            
-            plot_dphi_from_phi1phi2(epoch, data_val, sol, checkpoint_dir)
+        plot_dphi_from_phi1phi2(epoch, data_val, sol, checkpoint_dir)
+
+        save_loss_and_metrics_plot(
+            current_epoch=eval_epochs[-1],
+            epochs=eval_epochs,
+            w_history_val=w_val_hist_dphi,
+            w_history_train=w_train_hist_dphi,
+            ks_history_val=ks_stat_val_hist_dphi,
+            ks_history_train=ks_stat_train_hist_dphi,
+            ks_pvalue_history_val=ks_pval_val_hist_dphi,
+            ks_pvalue_history_train=ks_pval_train_hist_dphi,
+            losses_train=losses_train,
+            losses_val=losses_val,
+            base_dir=checkpoint_dir,
+            figname='loss_metrics_plots_dphi',
+            eval_name="_evalonly"
+        )
         correlation_plot_2d(epoch, data_val, sol, checkpoint_dir)
 
 
@@ -915,22 +967,6 @@ if __name__ == "__main__":
             gamma if not LRfixed else None
         )
 
-        # Lists for tracking losses
-        losses_train = []
-        losses_val = []
-
-        # Histories for evaluation metrics (list of lists for each variable)
-        w_hist_train = [[] for _ in range(data_train.shape[1])]
-        w_hist_val   = [[] for _ in range(data_train.shape[1])]
-
-        ks_stat_hist_train = [[] for _ in range(data_train.shape[1])]
-        ks_stat_hist_val   = [[] for _ in range(data_train.shape[1])]
-
-        ks_pval_hist_train = [[] for _ in range(data_train.shape[1])]
-        ks_pval_hist_val   = [[] for _ in range(data_train.shape[1])]
-
-        eval_epochs = []
-
         # Resume from checkpoint if specified
         start_epoch = 0
         if args.resume and os.path.isfile(args.resume):
@@ -954,12 +990,12 @@ if __name__ == "__main__":
             
             # Mappatura delle metriche da gestire
             metrics_map = {
-                'w_history_train': w_hist_train,
-                'w_history_val': w_hist_val,
-                'ks_stat_history_train': ks_stat_hist_train,
-                'ks_stat_history_val': ks_stat_hist_val,
-                'ks_pvalue_history_train': ks_pval_hist_train,
-                'ks_pvalue_history_val': ks_pval_hist_val
+                'w_history_train': w_train_hist,
+                'w_history_val': w_val_hist,
+                'ks_stat_history_train': ks_stat_train_hist,
+                'ks_stat_history_val': ks_stat_val_hist,
+                'ks_pvalue_history_train': ks_pval_train_hist,
+                'ks_pvalue_history_val': ks_pval_val_hist
             }
 
             for key_new, target_list in metrics_map.items():
@@ -972,6 +1008,24 @@ if __name__ == "__main__":
                         legacy_key = f"{key_new}_{i}"
                         if legacy_key in checkpoint:
                             target_list[i] = checkpoint[legacy_key]
+            
+            # Wasserstein dphi
+            if 'w_history_val_dphi' in checkpoint:
+                w_val_hist_dphi = checkpoint['w_history_val_dphi']
+            if 'w_history_train_dphi' in checkpoint:
+                w_train_hist_dphi = checkpoint['w_history_train_dphi']
+            
+            # KS Statistic dphi
+            if 'ks_stat_history_val_dphi' in checkpoint:
+                ks_stat_val_hist_dphi = checkpoint['ks_stat_history_val_dphi']
+            if 'ks_stat_history_train_dphi' in checkpoint:
+                ks_stat_train_hist_dphi = checkpoint['ks_stat_history_train_dphi']
+            
+            # KS p-value dphi
+            if 'ks_pvalue_history_val_dphi' in checkpoint:
+                ks_pval_val_hist_dphi = checkpoint['ks_pvalue_history_val_dphi']
+            if 'ks_pvalue_history_train_dphi' in checkpoint:
+                ks_pval_train_hist_dphi = checkpoint['ks_pvalue_history_train_dphi']
 
             if not LRfixed:
                 if 'scheduler_state_dict' in checkpoint:
@@ -1027,7 +1081,7 @@ if __name__ == "__main__":
                 # Flow matching loss
                 loss_cfm = torch.pow(out - path_sample.dx_t, 2).mean()
 
-                if cos_sim:
+                if cos_sim_check:
                     cos_sim = F.cosine_similarity(out, path_sample.dx_t, dim=1, eps=1e-8)
                     loss_sim = (1.0 - cos_sim).mean()
                     loss = loss_cfm + loss_sim
@@ -1054,7 +1108,7 @@ if __name__ == "__main__":
                 
                 out_v = vf4(path_v.x_t, path_v.t)
                 v_loss_cfm = torch.pow(out_v - path_v.dx_t, 2).mean().item()
-                if cos_sim:
+                if cos_sim_check:
                     v_loss_sim = (1.0 - F.cosine_similarity(out_v, path_v.dx_t, dim=1, eps=1e-8)).mean().item()
                     v_loss = v_loss_cfm + v_loss_sim
                 else:
@@ -1102,19 +1156,38 @@ if __name__ == "__main__":
                         w_train = stats.wasserstein_distance(data_train[:, i], final_pos[:, i])
                         w_val   = stats.wasserstein_distance(data_val[:, i], final_pos[:, i])
                         
-                        w_hist_train[i].append(w_train)
-                        w_hist_val[i].append(w_val)
+                        w_train_hist[i].append(w_train)
+                        w_val_hist[i].append(w_val)
                         
                         # Kolmogorov-Smirnov (Training)
                         ks_s_t, ks_p_t = stats.ks_2samp(data_train[:, i], final_pos[:, i])
-                        ks_stat_hist_train[i].append(ks_s_t)
-                        ks_pval_hist_train[i].append(ks_p_t)
+                        ks_stat_train_hist[i].append(ks_s_t)
+                        ks_pval_train_hist[i].append(ks_p_t)
                         
                         # Kolmogorov-Smirnov (Validation)
                         ks_s_v, ks_p_v = stats.ks_2samp(data_val[:, i], final_pos[:, i])
-                        ks_stat_hist_val[i].append(ks_s_v)
-                        ks_pval_hist_val[i].append(ks_p_v)
+                        ks_stat_val_hist[i].append(ks_s_v)
+                        ks_pval_val_hist[i].append(ks_p_v)
                     
+                    # Compute dphi metrics
+                    dphi_data_train = compute_dphi(data_train[:, 0], data_train[:, 1])
+                    dphi_data_val = compute_dphi(data_val[:, 0], data_val[:, 1])
+                    dphi_gen = compute_dphi(final_pos[:, 0], final_pos[:, 1])
+
+                    w_dphi_train = stats.wasserstein_distance(dphi_data_train, dphi_gen)
+                    ks_s_dphi_train, ks_p_dphi_train = stats.ks_2samp(dphi_data_train, dphi_gen)
+
+                    w_dphi_val = stats.wasserstein_distance(dphi_data_val, dphi_gen)
+                    ks_s_dphi_val, ks_p_dphi_val = stats.ks_2samp(dphi_data_val, dphi_gen)
+
+                    w_val_hist_dphi.append(w_dphi_val)
+                    w_train_hist_dphi.append(w_dphi_train)
+                    ks_stat_val_hist_dphi.append(ks_s_dphi_val)
+                    ks_stat_train_hist_dphi.append(ks_s_dphi_train)
+                    ks_pval_val_hist_dphi.append(ks_p_dphi_val)
+                    ks_pval_train_hist_dphi.append(ks_p_dphi_train)
+
+
                     eval_epochs.append(epoch)
 
                 # Logging metrics
@@ -1122,8 +1195,8 @@ if __name__ == "__main__":
                 elapsed = time.time() - global_start_time
                 
                 print("-" * 100)
-                print(f'| Epoch {epoch:6d} | Loss: {avg_loss:8.4f}')
                 print(f'| Time: {total_time_str} | Speed: {elapsed * 1000 / epoch if epoch > 0 else 0:5.2f} ms/epoch')
+                print(f'| Epoch {epoch:6d} | Loss: {avg_loss:8.4f} | LR: {optim4.param_groups[0]["lr"]:.6f}')
                 print_gpu_memory(epoch=epoch)
                 print("-" * 100)
 
@@ -1140,12 +1213,18 @@ if __name__ == "__main__":
                     'optimizer_state_dict': optim4.state_dict(),
                     'loss_history_train': losses_train,
                     'loss_history_val': losses_val,
-                    'w_history_train': w_hist_train,
-                    'w_history_val': w_hist_val,
-                    'ks_stat_history_train': ks_stat_hist_train,
-                    'ks_stat_history_val': ks_stat_hist_val,
-                    'ks_pvalue_history_train': ks_pval_hist_train,
-                    'ks_pvalue_history_val': ks_pval_hist_val,
+                    'w_history_train': w_train_hist,
+                    'w_history_val': w_val_hist,
+                    'ks_stat_history_train': ks_stat_train_hist,
+                    'ks_stat_history_val': ks_stat_val_hist,
+                    'ks_pvalue_history_train': ks_pval_train_hist,
+                    'ks_pvalue_history_val': ks_pval_val_hist,
+                    'w_history_train_dphi': w_train_hist_dphi,
+                    'w_history_val_dphi': w_val_hist_dphi,
+                    'ks_stat_history_train_dphi': ks_stat_train_hist_dphi,
+                    'ks_stat_history_val_dphi': ks_stat_val_hist_dphi,
+                    'ks_pvalue_history_train_dphi': ks_pval_train_hist_dphi,
+                    'ks_pvalue_history_val_dphi': ks_pval_val_hist_dphi,
                     'eval_epochs': eval_epochs
                 }
                 if not LRfixed:
@@ -1186,17 +1265,31 @@ if __name__ == "__main__":
                     save_loss_and_metrics_plot(
                         epoch,
                         eval_epochs,
-                        w_hist_val[i],
-                        w_hist_train[i],
-                        ks_stat_hist_val[i],
-                        ks_stat_hist_train[i],
-                        ks_pval_hist_val[i],
-                        ks_pval_hist_train[i],
+                        w_val_hist[i],
+                        w_train_hist[i],
+                        ks_stat_val_hist[i],
+                        ks_stat_train_hist[i],
+                        ks_pval_val_hist[i],
+                        ks_pval_train_hist[i],
                         losses_train,
                         losses_val,
                         checkpoint_dir,
                         figname = 'loss_metrics_plots_variable' + str(i+1)
                         )
+                save_loss_and_metrics_plot(
+                    epoch,
+                    eval_epochs,
+                    w_val_hist_dphi,
+                    w_train_hist_dphi,
+                    ks_stat_val_hist_dphi,
+                    ks_stat_train_hist_dphi,
+                    ks_pval_val_hist_dphi,
+                    ks_pval_train_hist_dphi,
+                    losses_train,
+                    losses_val,
+                    checkpoint_dir,
+                    figname = 'loss_metrics_plots_dphi'
+                    )
                 print(f"--- Loss and metrics evolution plot saved for epoch {epoch} ---")
 
             # Remove references to batch tensors to free memory at the end of each epoch
