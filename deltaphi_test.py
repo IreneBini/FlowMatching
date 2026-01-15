@@ -138,7 +138,8 @@ def save_evaluation_plots(
         T,
         target_data,
         base_dir,
-        dim_index=0
+        dim_index=0,
+        variable_name='dphi'
     ):
     """Saves comparison plots for a specific epoch.
     Args:
@@ -169,13 +170,13 @@ def save_evaluation_plots(
             color='cyan'
         )
         axes[idx].set_title(f't = {T[t_idx].item():.2f}')
-        axes[idx].set_xlabel('dphi')
+        axes[idx].set_xlabel(variable_name)
         axes[idx].set_ylabel('Density')
         axes[idx].grid(alpha=0.3)
         axes[idx].set_xlim(data.min() - 0.5, data.max() + 0.5)
     plt.suptitle('Distribution Evolution', fontsize=14, y=1.00)
     plt.tight_layout()
-    plt.savefig(os.path.join(epoch_dir, 'variable' + str(dim_index) + '_distribution_evolution.png'))
+    plt.savefig(os.path.join(epoch_dir, variable_name + '_distribution_evolution.png'))
     plt.close()
 
     # Plot 2: Final Comparison
@@ -196,20 +197,22 @@ def save_evaluation_plots(
         color='cyan',
         label='Generated'
     )
-    plt.xlabel('variable' + str(dim_index), fontsize=12)
+    plt.xlabel(variable_name, fontsize=12)
     plt.ylabel('Density', fontsize=12)
     plt.xlim(data.min() - 0.5, data.max() + 0.5)
     plt.legend()
     plt.grid(alpha=0.3)
     plt.title(f'Comparison at Epoch {epoch}', fontsize=12)
-    plt.savefig(os.path.join(epoch_dir, 'variable' + str(dim_index) + '_final_comparison.png'), dpi=200)
+    plt.savefig(os.path.join(epoch_dir, variable_name + '_final_comparison.png'), dpi=200)
     plt.close()
 
 def correlation_plot_2d(
     epoch,
     target_data,
     sol,
-    base_dir
+    base_dir,
+    variable_names=('phi1', 'phi2'),
+    index = (0, 1)
 ):
     """Plots the 2D correlation between the two variables for target and generated data.
     """
@@ -223,36 +226,36 @@ def correlation_plot_2d(
     # Target Data
     plt.subplot(1, 2, 1)
     plt.hist2d(
-        target_data[:, 0],
-        target_data[:, 1],
+        target_data[:, index[0]],
+        target_data[:, index[1]],
         bins=50,
         density=True,
         cmap='Reds'
     )
     plt.colorbar(label='Density')
-    plt.xlabel('phi1', fontsize=12)
-    plt.ylabel('phi2', fontsize=12)
+    plt.xlabel(variable_names[0], fontsize=12)
+    plt.ylabel(variable_names[1], fontsize=12)
     plt.title('Target Data Correlation', fontsize=14)
     plt.grid(alpha=0.3)
 
     # Generated Data
     plt.subplot(1, 2, 2)
     plt.hist2d(
-        gen_final[:, 0],
-        gen_final[:, 1],
+        gen_final[:, index[0]],
+        gen_final[:, index[1]],
         bins=50,
         density=True,
         cmap='Blues'
     )
     plt.colorbar(label='Density')
-    plt.xlabel('phi1', fontsize=12)
-    plt.ylabel('phi2', fontsize=12)
+    plt.xlabel(variable_names[0], fontsize=12)
+    plt.ylabel(variable_names[1], fontsize=12)
     plt.title('Generated Data Correlation', fontsize=14)
     plt.grid(alpha=0.3)
 
     plt.suptitle(f'Correlation Comparison at Epoch {epoch}', fontsize=16)
     plt.tight_layout()
-    plt.savefig(os.path.join(epoch_dir, 'correlation_phi1_phi2.png'), dpi=200)
+    plt.savefig(os.path.join(epoch_dir, variable_names[0] + '_' + variable_names[1] + '_correlation.png'), dpi=200)
     plt.close()
 
 def compute_dphi(
@@ -265,22 +268,29 @@ def compute_dphi(
     dphi = (dphi + np.pi) % (2 * np.pi) - np.pi
     return dphi
 
-def plot_dphi_from_phi1phi2(
+def compute_dphi_from_pxpy(
+    px1,
+    py1,
+    px2,
+    py2
+):
+    """Computes dphi from px and py values.
+    """
+    phi1 = np.arctan2(py1, px1)
+    phi2 = np.arctan2(py2, px2)
+    dphi = compute_dphi(phi1, phi2)
+    return dphi
+
+def plot_dphi(
     epoch,
-    target_data,
-    sol,
+    dphi_data,
+    dphi_gen,
     base_dir
 ):
-    """Plots the dphi distribution derived from phi1 and phi2 data.
+    """Plots the dphi distribution.
     """
     epoch_dir = os.path.join(base_dir, f"epoch_{epoch}")
     os.makedirs(epoch_dir, exist_ok=True)
-
-    gen_final = sol[-1] # Shape: (N, 2)
-
-    dphi_data = compute_dphi(target_data[:, 0], target_data[:, 1])
-    dphi_gen = compute_dphi(gen_final[:, 0], gen_final[:, 1])
-
 
     plt.figure(figsize=(8, 5))
     plt.hist(
@@ -301,8 +311,47 @@ def plot_dphi_from_phi1phi2(
     plt.ylabel('Density', fontsize=12)
     plt.title(f'dphi Distribution at Epoch {epoch}', fontsize=14)
     plt.grid(alpha=0.3)
-    plt.savefig(os.path.join(epoch_dir, 'dphi_distribution_from_phi1phi2.png'), dpi=200)
+    plt.savefig(os.path.join(epoch_dir, 'dphi_distribution.png'), dpi=200)
     plt.close()
+
+# def plot_dphi_from_phi1phi2(
+#     epoch,
+#     target_data,
+#     sol,
+#     base_dir
+# ):
+#     """Plots the dphi distribution derived from phi1 and phi2 data.
+#     """
+#     epoch_dir = os.path.join(base_dir, f"epoch_{epoch}")
+#     os.makedirs(epoch_dir, exist_ok=True)
+
+#     gen_final = sol[-1] # Shape: (N, 2)
+
+#     dphi_data = compute_dphi(target_data[:, 0], target_data[:, 1])
+#     dphi_gen = compute_dphi(gen_final[:, 0], gen_final[:, 1])
+
+
+#     plt.figure(figsize=(8, 5))
+#     plt.hist(
+#         dphi_data,
+#         bins=50,
+#         density=True,
+#         alpha=0.7,
+#         color='red'
+#     )
+#     plt.hist(
+#         dphi_gen,
+#         bins=50,
+#         density=True,
+#         alpha=0.7,
+#         color='cyan'
+#     )
+#     plt.xlabel('dphi', fontsize=12)
+#     plt.ylabel('Density', fontsize=12)
+#     plt.title(f'dphi Distribution at Epoch {epoch}', fontsize=14)
+#     plt.grid(alpha=0.3)
+#     plt.savefig(os.path.join(epoch_dir, 'dphi_distribution_from_phi1phi2.png'), dpi=200)
+#     plt.close()
 
 # def save_evaluation_plots_2d(
 #         epoch, 
@@ -612,7 +661,13 @@ def create_experiment_summary(
 
     print(f"--- Summary file created at: {summary_path} ---")
 
-def plot_train_val_dist(train_data, val_data, base_dir, namefig = 'train_val_split_check.png'):
+def plot_train_val_dist(
+    train_data,
+    val_data,
+    base_dir,
+    namefig = 'train_val_split_check.png',
+    var_name = 'dphi'
+):
     """Plots and saves the training and validation distribution comparison."
     """
     plt.figure(figsize=(10, 6))
@@ -620,7 +675,7 @@ def plot_train_val_dist(train_data, val_data, base_dir, namefig = 'train_val_spl
     plt.hist(train_data, bins=50, density=True, alpha=0.5, color='tab:blue', label=f'Train ({len(train_data)} samples)')
     plt.hist(val_data, bins=50, density=True, alpha=0.5, color='tab:orange', label=f'Validation ({len(val_data)} samples)')
     
-    plt.xlabel('dphi', fontsize=12)
+    plt.xlabel(var_name, fontsize=12)
     plt.ylabel('Density', fontsize=12)
     plt.title('Comparison: Training vs Validation Distribution', fontsize=14)
     plt.legend()
@@ -734,11 +789,13 @@ if __name__ == "__main__":
     os.makedirs(checkpoint_dir, exist_ok=True)
 
     # Load dataset
-    realistic_dataset = np.load("phi1_phi2.npy")
-    data = realistic_dataset[:, 2:4]
+    realistic_dataset = np.load("pxpy.npy")
+    data = realistic_dataset[:, 2:6]  # Extract px1, py1, px2, py2
     
-    # print(f"shape data: {data.shape}")
-    # print(f"first 5 samples:\n {data[:5, :]}")
+    print(f"shape data: {data.shape}")
+    print(f"first 5 samples:\n {data[:5, :]}")
+
+    list_var_names = ['px1', 'py1', 'px2', 'py2']
 
     # Shuffle and split dataset
     seed_base = 5
@@ -921,10 +978,18 @@ if __name__ == "__main__":
                     T_eval.cpu(),
                     data_val,
                     checkpoint_dir,
-                    dim_index=i
+                    dim_index=i,
+                    variable_name=f'variable{i+1}'
                 )
-        
-        plot_dphi_from_phi1phi2(epoch, data_val, sol, checkpoint_dir)
+
+        dphi_data_val = compute_dphi_from_pxpy(data_val[:, 0], data_val[:, 1], data_val[:, 2], data_val[:, 3])
+        dphi_gen = compute_dphi_from_pxpy(
+            sol[-1][:, 0],
+            sol[-1][:, 1],
+            sol[-1][:, 2],
+            sol[-1][:, 3]
+        )
+        plot_dphi(epoch, dphi_data_val, dphi_gen, checkpoint_dir)
 
         save_loss_and_metrics_plot(
             current_epoch=eval_epochs[-1],
@@ -941,8 +1006,8 @@ if __name__ == "__main__":
             figname='loss_metrics_plots_dphi',
             eval_name="_evalonly"
         )
-        correlation_plot_2d(epoch, data_val, sol, checkpoint_dir)
-
+        correlation_plot_2d(epoch, data_val, sol, checkpoint_dir, variable_names=['px1', 'py1'], index=(0, 1))
+        correlation_plot_2d(epoch, data_train, sol, checkpoint_dir, variable_names=['px2', 'py2'], index=(2, 3))
 
         print("EVALUATION COMPLETED")
 
@@ -961,8 +1026,8 @@ if __name__ == "__main__":
             epochs,
             bs,
             lr,
-            "phi1_phi2.npy",
-            "phi1 and phi2",
+            "pxpy.npy",
+            "px1, py1, px2, py2",
             step_size if not LRfixed else None,
             gamma if not LRfixed else None
         )
@@ -1170,9 +1235,27 @@ if __name__ == "__main__":
                         ks_pval_val_hist[i].append(ks_p_v)
                     
                     # Compute dphi metrics
-                    dphi_data_train = compute_dphi(data_train[:, 0], data_train[:, 1])
-                    dphi_data_val = compute_dphi(data_val[:, 0], data_val[:, 1])
-                    dphi_gen = compute_dphi(final_pos[:, 0], final_pos[:, 1])
+                    dphi_data_train = compute_dphi_from_pxpy(
+                        data_train[:, 0],
+                        data_train[:, 1],
+                        data_train[:, 2],
+                        data_train[:, 3]
+                    )
+                    dphi_data_val = compute_dphi_from_pxpy(
+                        data_val[:, 0],
+                        data_val[:, 1],
+                        data_val[:, 2],
+                        data_val[:, 3]
+                    )
+                    dphi_gen = compute_dphi_from_pxpy(
+                        final_pos[:, 0],
+                        final_pos[:, 1],
+                        final_pos[:, 2],
+                        final_pos[:, 3]
+                    )
+                    # dphi_data_train = compute_dphi(data_train[:, 0], data_train[:, 1])
+                    # dphi_data_val = compute_dphi(data_val[:, 0], data_val[:, 1])
+                    # dphi_gen = compute_dphi(final_pos[:, 0], final_pos[:, 1])
 
                     w_dphi_train = stats.wasserstein_distance(dphi_data_train, dphi_gen)
                     ks_s_dphi_train, ks_p_dphi_train = stats.ks_2samp(dphi_data_train, dphi_gen)
@@ -1186,7 +1269,6 @@ if __name__ == "__main__":
                     ks_stat_train_hist_dphi.append(ks_s_dphi_train)
                     ks_pval_val_hist_dphi.append(ks_p_dphi_val)
                     ks_pval_train_hist_dphi.append(ks_p_dphi_train)
-
 
                     eval_epochs.append(epoch)
 
@@ -1241,18 +1323,21 @@ if __name__ == "__main__":
                         T_eval.cpu(),
                         data_val,
                         checkpoint_dir,
-                        dim_index=i
+                        dim_index=i,
+                        variable_name=list_var_names[i]
                     )
                 correlation_plot_2d(
                     epoch,
                     data_val,
                     sol,
-                    checkpoint_dir
+                    checkpoint_dir,
+                    variable_names=list_var_names[0:2],
+                    index=(0, 1)
                 )
-                plot_dphi_from_phi1phi2(
+                plot_dphi(
                     epoch,
-                    data_val,
-                    sol,
+                    dphi_data_val,
+                    dphi_gen,
                     checkpoint_dir
                 )
                 
@@ -1274,7 +1359,7 @@ if __name__ == "__main__":
                         losses_train,
                         losses_val,
                         checkpoint_dir,
-                        figname = 'loss_metrics_plots_variable' + str(i+1)
+                        figname = 'loss_metrics_plots_' + list_var_names[i]
                         )
                 save_loss_and_metrics_plot(
                     epoch,
