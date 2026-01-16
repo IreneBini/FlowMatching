@@ -71,7 +71,8 @@ class MLP(nn.Module):
             input_dim: int = 1,
             time_dim: int = 1,
             hidden_dim: int = 128,
-            num_layers: int = 4
+            num_layers: int = 4,
+            dropout: float = 0.0
         ):
         super().__init__()
         
@@ -83,10 +84,12 @@ class MLP(nn.Module):
         self.main = nn.Sequential(
             nn.Linear(input_dim+time_dim, hidden_dim),
             Swish(),
+            nn.Dropout(dropout),
             *[
                 nn.Sequential(
                     nn.Linear(hidden_dim, hidden_dim),
                     Swish(),
+                    nn.Dropout(dropout),
                 ) for _ in range(num_layers - 2)
             ],
             nn.Linear(hidden_dim, input_dim),
@@ -631,6 +634,7 @@ def create_experiment_summary(
         f.write(f"Layers:              {num_layers}\n")
         f.write(f"Hidden Dim:          {hidden_dim}\n")
         f.write(f"Activation:          Swish (Sigmoid * x)\n")
+        f.write(f"Dropout:             0.1\n")
         f.write(f"Total Parameters:    {total_params:,}\n")
         f.write("-" * 20 + "\n")
         f.write("FLOW PARAMETERS:\n")
@@ -828,7 +832,8 @@ if __name__ == "__main__":
         input_dim=data.shape[1],
         time_dim=1,
         hidden_dim=hidden_dim,
-        num_layers=num_layers
+        num_layers=num_layers,
+        dropout=0.1
     ).to(device)
     path = AffineProbPath(scheduler=CondOTScheduler())
     optim4 = torch.optim.Adam(vf4.parameters(), lr=lr)
@@ -839,7 +844,7 @@ if __name__ == "__main__":
         print("Using variable learning rate schedule.")
         # scheduler parameters
         step_size = 10000 # LR decrease every 100 epochs
-        gamma = 0.5 # LR decrease factor
+        gamma = 0.1 # LR decrease factor
         scheduler = torch.optim.lr_scheduler.StepLR(
             optim4,
             step_size=step_size,
