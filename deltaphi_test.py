@@ -609,6 +609,7 @@ def create_experiment_summary(
         epochs,
         bs,
         lr,
+        start_epoch,
         dataset_name="deltaphimoredata.npy",
         data_target_var="dphi",
         step_size=None,
@@ -622,6 +623,8 @@ def create_experiment_summary(
         f.write("=" * 20 + "\n")
         f.write(f"Date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"Experiment Name: {name}\n")
+        if args.resume:
+            f.write(f"Resume from epoch: {start_epoch}\n")
         f.write("-" * 20 + "\n")
         f.write("DATASET INFO:\n")
         f.write(f"Target File:         {dataset_name}\n")
@@ -634,7 +637,7 @@ def create_experiment_summary(
         f.write(f"Layers:              {num_layers}\n")
         f.write(f"Hidden Dim:          {hidden_dim}\n")
         f.write(f"Activation:          Swish (Sigmoid * x)\n")
-        f.write(f"Dropout:             0.1\n")
+        f.write(f"Dropout:             {args.dropout}\n")
         f.write(f"Total Parameters:    {total_params:,}\n")
         f.write("-" * 20 + "\n")
         f.write("FLOW PARAMETERS:\n")
@@ -657,6 +660,8 @@ def create_experiment_summary(
         if args.variable_lr:
             f.write(f"Scheduler Params:    StepSize={step_size}, Gamma={gamma}\n")
         f.write(f"Loss Function:       MSE {'+ Cosine Similarity' if args.cosine_similarity_loss else ''}\n")
+        if args.cosine_similarity_loss:
+            f.write(f"lambda               {args.coeff}\n")
         f.write("-" * 20 + "\n")
         f.write("EVALUATION CONFIG (In-Training):\n")
         f.write("ODE Solver:          dopri5\n")
@@ -775,6 +780,20 @@ if __name__ == "__main__":
         help="If set, uses cosine similarity loss sum with MSE loss"
     )
 
+    parser.add_argument(
+        "--coeff",
+        type=float,
+        default=1.0,
+        help=""
+    )
+
+    parser.add_argument(
+        "--dropout",
+        type=float,
+        default=0.1,
+        help="Dropout value"
+    )
+
     args = parser.parse_args()
 
     name = args.name
@@ -788,6 +807,12 @@ if __name__ == "__main__":
     hidden_dim = args.hidden_dim
 
     cos_sim_check = args.cosine_similarity_loss
+    coeff = args.coeff
+
+    dropout = args.dropout
+
+    print(f"lambda = {coeff}")
+    print(f"dropout: {dropout}")
 
     checkpoint_dir = f"checkpoints_{name}"
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -833,7 +858,7 @@ if __name__ == "__main__":
         time_dim=1,
         hidden_dim=hidden_dim,
         num_layers=num_layers,
-        dropout=0.1
+        dropout=dropout
     ).to(device)
     path = AffineProbPath(scheduler=CondOTScheduler())
     optim4 = torch.optim.Adam(vf4.parameters(), lr=lr)
@@ -843,7 +868,7 @@ if __name__ == "__main__":
     else:
         print("Using variable learning rate schedule.")
         # scheduler parameters
-        step_size = 10000 # LR decrease every 100 epochs
+        step_size = 20000 # LR decrease every 100 epochs
         gamma = 0.1 # LR decrease factor
         scheduler = torch.optim.lr_scheduler.StepLR(
             optim4,
@@ -1019,24 +1044,6 @@ if __name__ == "__main__":
     else:
         print("TRAINING MODE")
 
-        # Create summary file
-        create_experiment_summary(
-            checkpoint_dir,
-            name,
-            args,
-            len(data),
-            total_params,
-            hidden_dim,
-            num_layers,
-            epochs,
-            bs,
-            lr,
-            "pxpy.npy",
-            "px1, py1, px2, py2",
-            step_size if not LRfixed else None,
-            gamma if not LRfixed else None
-        )
-
         # Resume from checkpoint if specified
         start_epoch = 0
         if args.resume and os.path.isfile(args.resume):
@@ -1106,6 +1113,25 @@ if __name__ == "__main__":
                     
             print(f"--- Resumed from epoch {start_epoch} with LR={args.lr} ---")
 
+        # Create summary file
+        create_experiment_summary(
+            checkpoint_dir,
+            name,
+            args,
+            len(data),
+            total_params,
+            hidden_dim,
+            num_layers,
+            epochs,
+            bs,
+            lr,
+            start_epoch,
+            "pxpy.npy",
+            "px1, py1, px2, py2",
+            step_size if not LRfixed else None,
+            gamma if not LRfixed else None
+        )
+
         # Create a custom sampler for dphi distribution
         data_train_tensor = torch.from_numpy(data_train).float()
 
@@ -1154,7 +1180,7 @@ if __name__ == "__main__":
                 if cos_sim_check:
                     cos_sim = F.cosine_similarity(out, path_sample.dx_t, dim=1, eps=1e-8)
                     loss_sim = (1.0 - cos_sim).mean()
-                    loss = loss_cfm + loss_sim
+                    loss = loss_cfm + coeff * loss_sim
                 else:
                     loss = loss_cfm
 
@@ -1180,7 +1206,7 @@ if __name__ == "__main__":
                 v_loss_cfm = torch.pow(out_v - path_v.dx_t, 2).mean().item()
                 if cos_sim_check:
                     v_loss_sim = (1.0 - F.cosine_similarity(out_v, path_v.dx_t, dim=1, eps=1e-8)).mean().item()
-                    v_loss = v_loss_cfm + v_loss_sim
+                    v_loss = v_loss_cfm + coeff * v_loss_sim
                 else:
                     v_loss = v_loss_cfm
                 losses_val.append(v_loss)
