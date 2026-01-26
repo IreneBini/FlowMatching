@@ -109,6 +109,15 @@ class MLP(nn.Module):
 
 class WrappedModel(ModelWrapper):
     def forward(self, x: torch.Tensor, t: torch.Tensor, **extras):
+        # # 1. Calcola l'output del modello (la velocità)
+        # v = self.model(x, t, **extras)
+        # v = torch.clamp(v, min=-100.0, max=100.0)
+        # if torch.isnan(v).any() or torch.isinf(v).any():
+        #     print(f"\n[!!!] ERRORE NUMERICO rilevato a t = {t.mean().item():.4f}")
+        #     print(f"Norma di x: {torch.norm(x).item():.4f}")
+        #     print(f"Valori NaN in v: {torch.isnan(v).sum().item()}")
+        #     print(f"Valori Inf in v: {torch.isinf(v).sum().item()}")
+        #     raise ValueError("Rilevati NaN/Inf nell'output del modello")
         return self.model(x, t, **extras)       
 
 def print_gpu_memory(epoch=None, step=None):
@@ -509,7 +518,7 @@ def save_loss_and_metrics_plot(
         base_dir,
         figname = 'loss_metrics_plots',
         eval_name='',
-        ma_n_metrics = 10,
+        ma_n_metrics = 20,
         ma_n_loss = 10
     ):
     """Saves the evolution plot of loss and evaluation metrics.
@@ -611,9 +620,7 @@ def create_experiment_summary(
         lr,
         start_epoch,
         dataset_name="deltaphimoredata.npy",
-        data_target_var="dphi",
-        step_size=None,
-        gamma=None
+        data_target_var="dphi"
     ):
     """Creates a summary file documenting the experiment configuration.
     """
@@ -653,19 +660,19 @@ def create_experiment_summary(
         f.write("-" * 20 + "\n")
         f.write("TRAINING CONFIGURATION:\n")
         f.write(f"Epochs:              {epochs}\n")
-        f.write(f"Initial Batch Size:  {bs}\n")
-        f.write(f"Dynamic Batching:    Full-dataset after epoch 2\n")
+        f.write(f"Batch Size:          {bs}\n")
+        # f.write(f"Dynamic Batching:    Full-dataset after epoch 2\n")
         f.write(f"Optimizer:           Adam (lr={lr})\n")
         f.write(f"LR Strategy:         {'Fixed' if args.variable_lr == False else 'StepLR'}\n")
         if args.variable_lr:
-            f.write(f"Scheduler Params:    StepSize={step_size}, Gamma={gamma}\n")
+            f.write(f"Scheduler Params:    StepSize={args.step_size}, Gamma={args.gamma}\n")
         f.write(f"Loss Function:       MSE {'+ Cosine Similarity' if args.cosine_similarity_loss else ''}\n")
         if args.cosine_similarity_loss:
             f.write(f"lambda               {args.coeff}\n")
         f.write("-" * 20 + "\n")
         f.write("EVALUATION CONFIG (In-Training):\n")
         f.write("ODE Solver:          dopri5\n")
-        f.write("Eval Samples:        50000\n")
+        f.write("Eval Samples:        100000\n")
         f.write("=" * 20 + "\n")
 
     print(f"--- Summary file created at: {summary_path} ---")
@@ -714,6 +721,18 @@ if __name__ == "__main__":
         "--variable_lr",
         action="store_true",
         help="If set, uses variable learning rate schedule; otherwise fixed LR"
+    )
+    parser.add_argument(
+        "--step_size",
+        type=int,
+        default=10000,
+        help=""
+    )
+    parser.add_argument(
+        "--gamma",
+        type=float,
+        default=0.1,
+        help=""
     )
     parser.add_argument(
         "--source_dist",
@@ -798,6 +817,8 @@ if __name__ == "__main__":
 
     name = args.name
     LRfixed = not args.variable_lr
+    step_size=args.step_size # LR decrease every 100 epochs
+    gamma=args.gamma # LR decrease factor
 
     lr = args.lr
     bs = args.batch_size
@@ -868,8 +889,6 @@ if __name__ == "__main__":
     else:
         print("Using variable learning rate schedule.")
         # scheduler parameters
-        step_size = 20000 # LR decrease every 100 epochs
-        gamma = 0.1 # LR decrease factor
         scheduler = torch.optim.lr_scheduler.StepLR(
             optim4,
             step_size=step_size,
@@ -926,7 +945,7 @@ if __name__ == "__main__":
 
             # Generate samples and evaluate
             with torch.no_grad():
-                n_samples_eval = 50000 
+                n_samples_eval = 100000 
                 x_init_eval = source_dist.sample((n_samples_eval,)).to(device)
                 if args.clamp:
                     x_init_eval = torch.clamp(x_init_eval, -3.0, 3.0)
@@ -939,7 +958,9 @@ if __name__ == "__main__":
                     time_grid=T_eval,
                     x_init=x_init_eval,
                     method='dopri5',
-                    return_intermediates=True
+                    return_intermediates=True,
+                    atol = 1e-5,
+                    rtol = 1e-5
                 )
                 sol = sol_eval.cpu().numpy()
 
@@ -1123,13 +1144,11 @@ if __name__ == "__main__":
             hidden_dim,
             num_layers,
             epochs,
-            bs,
+            bs, 
             lr,
             start_epoch,
             "pxpy.npy",
-            "px1, py1, px2, py2",
-            step_size if not LRfixed else None,
-            gamma if not LRfixed else None
+            "px1, py1, px2, py2"
         )
 
         # Create a custom sampler for dphi distribution
@@ -1138,21 +1157,15 @@ if __name__ == "__main__":
         # Create a DataLoader over the full dataset and iterate in batches
         dataset = torch.utils.data.TensorDataset(data_train_tensor)
 
+        loader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=bs,
+            shuffle=True
+        )
+
         for epoch in range(start_epoch, epochs):
             torch.manual_seed(seed_base + epoch) # For reproducibility also when restart the training from a checkpoint 
-            if epoch >= 2:
-                loader = torch.utils.data.DataLoader(
-                    dataset,
-                    batch_size=len(dataset),
-                    shuffle=True
-                )
-            else:
-                loader = torch.utils.data.DataLoader(
-                    dataset,
-                    batch_size=bs,
-                    shuffle=True
-                )
-
+    
             epoch_loss_accum = 0.0
             num_batches = 0
 
@@ -1186,6 +1199,9 @@ if __name__ == "__main__":
 
                 # Optimizer step
                 loss.backward()
+                # Add gradient clipping
+                #torch.nn.utils.clip_grad_norm_(vf4.parameters(), max_norm=1.0)
+                # Update weights
                 optim4.step()
                     
                 epoch_loss_accum += loss.item()
@@ -1225,7 +1241,7 @@ if __name__ == "__main__":
                 print(f"Epoch {epoch}: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                 vf4.eval()
                 with torch.no_grad():
-                    n_samples_eval = 50000 
+                    n_samples_eval = 100000 
                     x_init_eval = source_dist.sample((n_samples_eval,)).to(device)
                     if args.clamp:
                         x_init_eval = torch.clamp(x_init_eval, -3.0, 3.0)
@@ -1240,7 +1256,9 @@ if __name__ == "__main__":
                         x_init=x_init_eval,
                         step_size=None,
                         method='dopri5',
-                        return_intermediates=True
+                        return_intermediates=True,
+                        atol = 1e-5,
+                        rtol = 1e-5
                         )
 
                     sol = sol_eval.cpu().numpy()
