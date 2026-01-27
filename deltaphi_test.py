@@ -753,6 +753,11 @@ if __name__ == "__main__":
         help="Path to .pth file to resume training"
     )
     parser.add_argument(
+        "--resume_lr",
+        action="store_true",
+        help="If set, resume from checkpoint with a new lr"
+    )
+    parser.add_argument(
         "--eval_only",
         action="store_true",
         help="If set, only evaluates existing checkpoints without training"
@@ -832,8 +837,8 @@ if __name__ == "__main__":
 
     dropout = args.dropout
 
-    print(f"lambda = {coeff}")
-    print(f"dropout: {dropout}")
+    # print(f"lambda = {coeff}")
+    # print(f"dropout: {dropout}")
 
     checkpoint_dir = f"checkpoints_{name}"
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -842,8 +847,8 @@ if __name__ == "__main__":
     realistic_dataset = np.load("pxpy.npy")
     data = realistic_dataset[:, 2:6]  # Extract px1, py1, px2, py2
     
-    print(f"shape data: {data.shape}")
-    print(f"first 5 samples:\n {data[:5, :]}")
+    # print(f"shape data: {data.shape}")
+    # print(f"first 5 samples:\n {data[:5, :]}")
 
     list_var_names = ['px1', 'py1', 'px2', 'py2']
 
@@ -918,6 +923,11 @@ if __name__ == "__main__":
     ks_pval_train_hist_dphi = []
 
     eval_epochs = []
+
+    best_eval_metric = float('inf')
+    patience_counter = 0
+    custom_patience = 10
+    lr_reduction_factor = 0.5
 
     if args.eval_only:
         print("EVALUATION ONLY MODE")
@@ -1124,6 +1134,20 @@ if __name__ == "__main__":
                 ks_pval_val_hist_dphi = checkpoint['ks_pvalue_history_val_dphi']
             if 'ks_pvalue_history_train_dphi' in checkpoint:
                 ks_pval_train_hist_dphi = checkpoint['ks_pvalue_history_train_dphi']
+            
+            if 'best_eval_metric' in checkpoint:
+                best_eval_metric = checkpoint['best_eval_metric']
+            
+            if 'patience' in checkpoint:
+                patience_counter = checkpoint['patience']
+            
+            if args.resume_lr:
+                lr = args.lr
+            else:
+                if 'lr' in checkpoint:
+                    lr = checkpoint['lr']
+                else:
+                    lr = args.lr
 
             if not LRfixed:
                 if 'scheduler_state_dict' in checkpoint:
@@ -1132,7 +1156,7 @@ if __name__ == "__main__":
                     for _ in range(start_epoch):
                         scheduler.step()
                     
-            print(f"--- Resumed from epoch {start_epoch} with LR={args.lr} ---")
+            print(f"--- Resumed from epoch {start_epoch} with LR={lr} ---")
 
         # Create summary file
         create_experiment_summary(
@@ -1150,6 +1174,9 @@ if __name__ == "__main__":
             "pxpy.npy",
             "px1, py1, px2, py2"
         )
+
+        print(f"best metric value: {best_eval_metric}")
+        print(f"patience: {patience_counter}")
 
         # Create a custom sampler for dphi distribution
         data_train_tensor = torch.from_numpy(data_train).float()
@@ -1306,6 +1333,7 @@ if __name__ == "__main__":
                     # dphi_data_val = compute_dphi(data_val[:, 0], data_val[:, 1])
                     # dphi_gen = compute_dphi(final_pos[:, 0], final_pos[:, 1])
 
+                    # metrics for dphi
                     w_dphi_train = stats.wasserstein_distance(dphi_data_train, dphi_gen)
                     ks_s_dphi_train, ks_p_dphi_train = stats.ks_2samp(dphi_data_train, dphi_gen)
 
@@ -1321,13 +1349,31 @@ if __name__ == "__main__":
 
                     eval_epochs.append(epoch)
 
+                    if w_dphi_val < best_eval_metric:
+                        best_eval_metric = w_dphi_val
+                        patience_counter = 0
+                        print(f"--- New best metric: {best_eval_metric:.6f} ---")
+                    else:
+                        patience_counter += 1
+                        print(f"--- Patience : {patience_counter}/{custom_patience} ---")
+
+                    if patience_counter >= custom_patience:
+                        # Riduciamo il Learning Rate manualmente
+                        for param_group in optim4.param_groups:
+                            old_lr = param_group['lr']
+                            new_lr = old_lr * lr_reduction_factor
+                            param_group['lr'] = new_lr
+                        
+                        patience_counter = 0 # Reset contatore dopo il calo
+                        print(f"--- Learning rate goes from {old_lr:.6e} to {new_lr:.6e} ---")
+
                 # Logging metrics
                 total_time_str = get_elapsed_time(global_start_time)
                 elapsed = time.time() - global_start_time
                 
                 print("-" * 100)
                 print(f'| Time: {total_time_str} | Speed: {elapsed * 1000 / epoch if epoch > 0 else 0:5.2f} ms/epoch')
-                print(f'| Epoch {epoch:6d} | Loss: {avg_loss:8.4f} | LR: {optim4.param_groups[0]["lr"]:.6f}')
+                print(f'| Epoch {epoch:6d} | Loss: {avg_loss:8.4f} | LR: {optim4.param_groups[0]["lr"]:.10f}')
                 print_gpu_memory(epoch=epoch)
                 print("-" * 100)
 
@@ -1356,10 +1402,11 @@ if __name__ == "__main__":
                     'ks_stat_history_val_dphi': ks_stat_val_hist_dphi,
                     'ks_pvalue_history_train_dphi': ks_pval_train_hist_dphi,
                     'ks_pvalue_history_val_dphi': ks_pval_val_hist_dphi,
-                    'eval_epochs': eval_epochs
+                    'eval_epochs': eval_epochs,
+                    'best_eval_metric': best_eval_metric,
+                    'patience': patience_counter,
+                    'lr': optim4.param_groups[0]["lr"]
                 }
-                if not LRfixed:
-                    save_dict['lr'] = scheduler.get_last_lr()[0]
                     
                 torch.save(save_dict, checkpoint_path)
                 print(f"--- Checkpoint saved: {checkpoint_path} ---")
@@ -1390,7 +1437,7 @@ if __name__ == "__main__":
                     checkpoint_dir
                 )
                 
-                print(f"--- Evaluation plots saved for epoch {epoch} ---")
+                # print(f"--- Evaluation plots saved for epoch {epoch} ---")
 
                 vf4.train() # Return to training mode
 
@@ -1424,7 +1471,7 @@ if __name__ == "__main__":
                     checkpoint_dir,
                     figname = 'loss_metrics_plots_dphi'
                     )
-                print(f"--- Loss and metrics evolution plot saved for epoch {epoch} ---")
+                # print(f"--- Loss and metrics evolution plot saved for epoch {epoch} ---")
 
             # Remove references to batch tensors to free memory at the end of each epoch
             del batch, x_1, x_0, t, out, loss
