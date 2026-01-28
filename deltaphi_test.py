@@ -132,7 +132,7 @@ def print_gpu_memory(epoch=None, step=None):
         if step is not None: prefix += f", Step {step}"
         
         print(
-            f"{prefix} | GPU Alloc: {allocated:.1f}MB | "
+            f"| GPU Alloc: {allocated:.1f}MB | "
             f"Reserv: {reserved:.1f}MB | Max: {max_allocated:.1f}MB"
         )
         
@@ -546,6 +546,7 @@ def save_loss_and_metrics_plot(
         axes[0].plot(ma_epochs, ma, linewidth=1, linestyle='--', color='cyan', label='Moving Average training')
     axes[0].set_ylabel('Wasserstein Distance')
     axes[0].set_xlabel('Epoch')
+    axes[0].set_ylim(0, 0.07)
     axes[0].legend()
     axes[0].set_title('Evolution of Wasserstein Distance')
 
@@ -1264,7 +1265,9 @@ if __name__ == "__main__":
 
             # save checkpoint and evaluation plots
             if epoch > 0 and epoch % save_every == 0:
+                torch.manual_seed(1)
                 # Evaluation: Generate samples and compute metrics
+                print("-" * 100)
                 print(f"Epoch {epoch}: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                 vf4.eval()
                 with torch.no_grad():
@@ -1352,30 +1355,36 @@ if __name__ == "__main__":
                     if w_dphi_val < best_eval_metric:
                         best_eval_metric = w_dphi_val
                         patience_counter = 0
+                        best_model_path = os.path.join(checkpoint_dir, f'epoch_{epoch}', f'model_epoch_{epoch}.pth')
+                        print(best_model_path)
                         print(f"--- New best metric: {best_eval_metric:.6f} ---")
                     else:
                         patience_counter += 1
                         print(f"--- Patience : {patience_counter}/{custom_patience} ---")
 
                     if patience_counter >= custom_patience:
-                        # Riduciamo il Learning Rate manualmente
+                        old_lr = optim4.param_groups[0]["lr"]
+                        new_lr = old_lr * lr_reduction_factor
+
+                        checkpoint = torch.load(best_model_path, map_location=device, weights_only=False)
+
+                        # load model and optimizer states
+                        vf4.load_state_dict(checkpoint['model_state_dict'])
+                        optim4.load_state_dict(checkpoint['optimizer_state_dict'])
+
                         for param_group in optim4.param_groups:
-                            old_lr = param_group['lr']
-                            new_lr = old_lr * lr_reduction_factor
                             param_group['lr'] = new_lr
                         
-                        patience_counter = 0 # Reset contatore dopo il calo
-                        print(f"--- Learning rate goes from {old_lr:.6e} to {new_lr:.6e} ---")
+                        patience_counter = 0
+                        print(f"--- Learning rate goes from {old_lr:.3e} to {new_lr:.3e} ---")
 
                 # Logging metrics
                 total_time_str = get_elapsed_time(global_start_time)
                 elapsed = time.time() - global_start_time
                 
-                print("-" * 100)
                 print(f'| Time: {total_time_str} | Speed: {elapsed * 1000 / epoch if epoch > 0 else 0:5.2f} ms/epoch')
-                print(f'| Epoch {epoch:6d} | Loss: {avg_loss:8.4f} | LR: {optim4.param_groups[0]["lr"]:.10f}')
+                print(f'| Loss: {avg_loss:8.4f} | LR: {optim4.param_groups[0]["lr"]:.3e}')
                 print_gpu_memory(epoch=epoch)
-                print("-" * 100)
 
                 # Create epoch directory
                 epoch_dir = os.path.join(checkpoint_dir, f'epoch_{epoch}')
@@ -1410,6 +1419,7 @@ if __name__ == "__main__":
                     
                 torch.save(save_dict, checkpoint_path)
                 print(f"--- Checkpoint saved: {checkpoint_path} ---")
+                print("-" * 100)
 
                 # Generate evaluation plots
                 for i in range(data_train.shape[1]):
