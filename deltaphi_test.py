@@ -504,105 +504,176 @@ def plot_dphi(
 #     plt.savefig(os.path.join(epoch_dir, 'flow_dynamics.png'), dpi=200)
 #     plt.close()
 
+# def save_loss_and_metrics_plot(
+#         current_epoch,
+#         epochs,
+#         w_history_val,
+#         w_history_train,
+#         ks_history_val,
+#         ks_history_train,
+#         ks_pvalue_history_val,
+#         ks_pvalue_history_train,
+#         losses_train,
+#         losses_val,
+#         base_dir,
+#         figname = 'loss_metrics_plots',
+#         eval_name='',
+#         ma_n_metrics = 20,
+#         ma_n_loss = 10
+#     ):
+#     """Saves the evolution plot of loss and evaluation metrics.
+#     """
+#     epoch_dir = os.path.join(base_dir, f"epoch_{current_epoch}")
+#     os.makedirs(epoch_dir, exist_ok=True)
+
+#     if len(epochs) != len(w_history_val):
+#         nn = len(epochs) - len(w_history_val)
+#         epochs = epochs[nn:]
+
+#     fig, axes = plt.subplots(2, 2, figsize=(18, 10)) 
+#     axes = axes.flatten()
+    
+#     # 0. Wasserstein
+#     axes[0].plot(epochs, w_history_val, marker='.', color='blue', linewidth=2, alpha=0.5, label='Validation')
+#     if len(w_history_val) >= ma_n_metrics:
+#         ma = np.convolve(w_history_val, np.ones(ma_n_metrics)/ma_n_metrics, mode='valid')
+#         ma_epochs = epochs[:-ma_n_metrics+1]
+#         axes[0].plot(ma_epochs, ma, linewidth=1, linestyle='--', color='blue', label='Moving Average validation')
+#     axes[0].plot(epochs, w_history_train, marker='.', color='cyan', linewidth=2, alpha=0.5, label='Training')
+#     if len(w_history_train) >= ma_n_metrics:
+#         ma = np.convolve(w_history_train, np.ones(ma_n_metrics)/ma_n_metrics, mode='valid')
+#         ma_epochs = epochs[:-ma_n_metrics+1]
+#         axes[0].plot(ma_epochs, ma, linewidth=1, linestyle='--', color='cyan', label='Moving Average training')
+#     axes[0].set_ylabel('Wasserstein Distance')
+#     axes[0].set_xlabel('Epoch')
+#     axes[0].set_ylim(0, 0.07)
+#     axes[0].legend()
+#     axes[0].set_title('Evolution of Wasserstein Distance')
+
+#     # 1. KS Statistic
+#     axes[1].plot(epochs, ks_history_val, marker='.', color='red', linewidth=2, alpha=0.5, label='Validation')
+#     if len(ks_history_val) >= ma_n_metrics:
+#         ma = np.convolve(ks_history_val, np.ones(ma_n_metrics)/ma_n_metrics, mode='valid')
+#         ma_epochs = epochs[:-ma_n_metrics+1]
+#         axes[1].plot(ma_epochs, ma, linewidth=1, linestyle='--', color='red', label='Moving Average validation')
+#     axes[1].plot(epochs, ks_history_train, marker='.', color='orange', linewidth=2, alpha=0.5, label='Training')
+#     if len(ks_history_train) >= ma_n_metrics:
+#         ma = np.convolve(ks_history_train, np.ones(ma_n_metrics)/ma_n_metrics, mode='valid')
+#         ma_epochs = epochs[:-ma_n_metrics+1]
+#         axes[1].plot(ma_epochs, ma, linewidth=1, linestyle='--', color='orange', label='Moving Average training')
+#     axes[1].set_ylabel('KS Statistic')
+#     axes[1].set_xlabel('Epoch')
+#     axes[1].legend()
+#     axes[1].set_title('Evolution of KS Statistic')
+
+#     # 2. KS p-value
+#     axes[2].plot(epochs, ks_pvalue_history_val, marker='.', color='green', linewidth=2, alpha=0.5, label='Validation')
+#     if len(ks_pvalue_history_val) >= ma_n_metrics:
+#         ma = np.convolve(ks_pvalue_history_val, np.ones(ma_n_metrics)/ma_n_metrics, mode='valid')
+#         ma_epochs = epochs[:-ma_n_metrics+1]
+#         axes[2].plot(ma_epochs, ma, linewidth=1, linestyle='--', color='green', label='Moving Average validation')
+#     axes[2].plot(epochs, ks_pvalue_history_train, marker='.', color='palegreen', linewidth=2, alpha=0.5, label='Training')
+#     if len(ks_pvalue_history_train) >= ma_n_metrics:
+#         ma = np.convolve(ks_pvalue_history_train, np.ones(ma_n_metrics)/ma_n_metrics, mode='valid')
+#         ma_epochs = epochs[:-ma_n_metrics+1]
+#         axes[2].plot(ma_epochs, ma, linewidth=1, linestyle='--', color='palegreen', label='Moving Average training')
+#     axes[2].set_ylabel('KS p-value')
+#     axes[2].set_xlabel('Epoch')
+#     axes[2].set_yscale('log')
+#     axes[2].set_ylim(1e-10, 1.0)
+#     axes[2].legend()
+#     axes[2].set_title('Evolution of KS p-value')
+
+#     # 3. Loss Plots
+#     if eval_name == '':
+#         iterations = range(len(losses_train))
+#     else:
+#         iterations = epochs
+#     axes[3].plot(iterations, losses_train, color='purple', linewidth=2, alpha=0.3, label='Training')
+#     if len(losses_train) > ma_n_loss:
+#         ma = np.convolve(losses_train, np.ones(ma_n_loss)/ma_n_loss, mode='valid')
+#         ma_iter = iterations[:-ma_n_loss+1]
+#         axes[3].plot(ma_iter, ma, linewidth=1, linestyle='--', color='purple', label='Moving Average training')
+#     axes[3].plot(iterations, losses_val, color='tab:purple', linewidth=2, alpha=0.3, label='Validation')
+#     if len(losses_val) > ma_n_loss:
+#         ma = np.convolve(losses_val, np.ones(ma_n_loss)/ma_n_loss, mode='valid')
+#         ma_iter = iterations[:-ma_n_loss+1]
+#         axes[3].plot(ma_iter, ma, linewidth=1, linestyle='--', color='tab:purple', label='Moving Average validation')
+#     axes[3].set_ylabel('Loss')
+#     axes[3].set_xlabel('Epoch')
+#     axes[3].legend()
+#     axes[3].set_title('Evolution of Loss')
+
+#     plt.tight_layout()
+#     plt.savefig(os.path.join(epoch_dir, figname + eval_name +'.png'), dpi=200)
+#     plt.close()
+
 def save_loss_and_metrics_plot(
         current_epoch,
         epochs,
-        w_history_val,
-        w_history_train,
-        ks_history_val,
-        ks_history_train,
-        ks_pvalue_history_val,
-        ks_pvalue_history_train,
+        w_mean_val, w_std_val,
+        w_mean_train, w_std_train,
+        ks_mean_val, ks_std_val,
+        ks_mean_train, ks_std_train,
+        ks_p_mean_val, ks_p_std_val, 
+        ks_p_mean_train, ks_p_std_train,
         losses_train,
         losses_val,
         base_dir,
         figname = 'loss_metrics_plots',
         eval_name='',
-        ma_n_metrics = 20,
-        ma_n_loss = 10
     ):
-    """Saves the evolution plot of loss and evaluation metrics.
+    """Saves plots with error bars (mean ± std).
     """
+
     epoch_dir = os.path.join(base_dir, f"epoch_{current_epoch}")
     os.makedirs(epoch_dir, exist_ok=True)
 
-    if len(epochs) != len(w_history_val):
-        nn = len(epochs) - len(w_history_val)
+    if len(epochs) != len(w_mean_val):
+        nn = len(epochs) - len(w_mean_val)
         epochs = epochs[nn:]
 
-    fig, axes = plt.subplots(2, 2, figsize=(18, 10)) 
+    fig, axes = plt.subplots(2, 2, figsize=(16, 10)) 
     axes = axes.flatten()
     
+    # Helper per plottare media + barre di errore
+    def plot_metric(ax, x, y, ystd, color, label):
+        ax.plot(x, y, color=color, linewidth=1, alpha=0.3)
+        ax.errorbar(x, y, yerr=ystd, fmt='o', color=color, label=label, markersize=4, capsize=3, elinewidth=1, alpha=0.8)
+
     # 0. Wasserstein
-    axes[0].plot(epochs, w_history_val, marker='.', color='blue', linewidth=2, alpha=0.5, label='Validation')
-    if len(w_history_val) >= ma_n_metrics:
-        ma = np.convolve(w_history_val, np.ones(ma_n_metrics)/ma_n_metrics, mode='valid')
-        ma_epochs = epochs[:-ma_n_metrics+1]
-        axes[0].plot(ma_epochs, ma, linewidth=1, linestyle='--', color='blue', label='Moving Average validation')
-    axes[0].plot(epochs, w_history_train, marker='.', color='cyan', linewidth=2, alpha=0.5, label='Training')
-    if len(w_history_train) >= ma_n_metrics:
-        ma = np.convolve(w_history_train, np.ones(ma_n_metrics)/ma_n_metrics, mode='valid')
-        ma_epochs = epochs[:-ma_n_metrics+1]
-        axes[0].plot(ma_epochs, ma, linewidth=1, linestyle='--', color='cyan', label='Moving Average training')
+    plot_metric(axes[0], epochs, w_mean_val, w_std_val, 'blue', 'Validation')
+    plot_metric(axes[0], epochs, w_mean_train, w_std_train, 'cyan', 'Training')
     axes[0].set_ylabel('Wasserstein Distance')
-    axes[0].set_xlabel('Epoch')
-    axes[0].set_ylim(0, 0.07)
-    axes[0].legend()
-    axes[0].set_title('Evolution of Wasserstein Distance')
+    axes[0].set_title('Wasserstein Distance')
+    axes[0].set_ylim(0, 0.07) # Opzionale: sbloccalo se vuoi un range fisso
 
     # 1. KS Statistic
-    axes[1].plot(epochs, ks_history_val, marker='.', color='red', linewidth=2, alpha=0.5, label='Validation')
-    if len(ks_history_val) >= ma_n_metrics:
-        ma = np.convolve(ks_history_val, np.ones(ma_n_metrics)/ma_n_metrics, mode='valid')
-        ma_epochs = epochs[:-ma_n_metrics+1]
-        axes[1].plot(ma_epochs, ma, linewidth=1, linestyle='--', color='red', label='Moving Average validation')
-    axes[1].plot(epochs, ks_history_train, marker='.', color='orange', linewidth=2, alpha=0.5, label='Training')
-    if len(ks_history_train) >= ma_n_metrics:
-        ma = np.convolve(ks_history_train, np.ones(ma_n_metrics)/ma_n_metrics, mode='valid')
-        ma_epochs = epochs[:-ma_n_metrics+1]
-        axes[1].plot(ma_epochs, ma, linewidth=1, linestyle='--', color='orange', label='Moving Average training')
+    plot_metric(axes[1], epochs, ks_mean_val, ks_std_val, 'red', 'Validation')
+    plot_metric(axes[1], epochs, ks_mean_train, ks_std_train, 'orange', 'Training')
     axes[1].set_ylabel('KS Statistic')
-    axes[1].set_xlabel('Epoch')
-    axes[1].legend()
-    axes[1].set_title('Evolution of KS Statistic')
+    axes[1].set_title('KS Statistic')
+    axes[1].set_ylim(0, 0.03)
 
     # 2. KS p-value
-    axes[2].plot(epochs, ks_pvalue_history_val, marker='.', color='green', linewidth=2, alpha=0.5, label='Validation')
-    if len(ks_pvalue_history_val) >= ma_n_metrics:
-        ma = np.convolve(ks_pvalue_history_val, np.ones(ma_n_metrics)/ma_n_metrics, mode='valid')
-        ma_epochs = epochs[:-ma_n_metrics+1]
-        axes[2].plot(ma_epochs, ma, linewidth=1, linestyle='--', color='green', label='Moving Average validation')
-    axes[2].plot(epochs, ks_pvalue_history_train, marker='.', color='palegreen', linewidth=2, alpha=0.5, label='Training')
-    if len(ks_pvalue_history_train) >= ma_n_metrics:
-        ma = np.convolve(ks_pvalue_history_train, np.ones(ma_n_metrics)/ma_n_metrics, mode='valid')
-        ma_epochs = epochs[:-ma_n_metrics+1]
-        axes[2].plot(ma_epochs, ma, linewidth=1, linestyle='--', color='palegreen', label='Moving Average training')
+    plot_metric(axes[2], epochs, ks_p_mean_val, ks_p_std_val, 'green', 'Validation')
+    plot_metric(axes[2], epochs, ks_p_mean_train, ks_p_std_train, 'palegreen', 'Training')
     axes[2].set_ylabel('KS p-value')
-    axes[2].set_xlabel('Epoch')
     axes[2].set_yscale('log')
     axes[2].set_ylim(1e-10, 1.0)
-    axes[2].legend()
-    axes[2].set_title('Evolution of KS p-value')
+    axes[2].set_title('KS p-value')
 
-    # 3. Loss Plots
-    if eval_name == '':
-        iterations = range(len(losses_train))
-    else:
-        iterations = epochs
-    axes[3].plot(iterations, losses_train, color='purple', linewidth=2, alpha=0.3, label='Training')
-    if len(losses_train) > ma_n_loss:
-        ma = np.convolve(losses_train, np.ones(ma_n_loss)/ma_n_loss, mode='valid')
-        ma_iter = iterations[:-ma_n_loss+1]
-        axes[3].plot(ma_iter, ma, linewidth=1, linestyle='--', color='purple', label='Moving Average training')
-    axes[3].plot(iterations, losses_val, color='tab:purple', linewidth=2, alpha=0.3, label='Validation')
-    if len(losses_val) > ma_n_loss:
-        ma = np.convolve(losses_val, np.ones(ma_n_loss)/ma_n_loss, mode='valid')
-        ma_iter = iterations[:-ma_n_loss+1]
-        axes[3].plot(ma_iter, ma, linewidth=1, linestyle='--', color='tab:purple', label='Moving Average validation')
+    # 3. Loss
+    iterations = epochs if eval_name != '' else range(len(losses_train))
+    axes[3].plot(iterations, losses_train, color='purple', label='Training', alpha=0.6)
+    axes[3].plot(iterations, losses_val, color='tab:purple', label='Validation', alpha=0.6)
     axes[3].set_ylabel('Loss')
-    axes[3].set_xlabel('Epoch')
-    axes[3].legend()
     axes[3].set_title('Evolution of Loss')
+
+    for ax in axes:
+        ax.set_xlabel('Epoch')
+        ax.legend(fontsize='small')
+        ax.grid(True, linestyle=':', alpha=0.6)
 
     plt.tight_layout()
     plt.savefig(os.path.join(epoch_dir, figname + eval_name +'.png'), dpi=200)
@@ -823,8 +894,6 @@ if __name__ == "__main__":
 
     name = args.name
     LRfixed = not args.variable_lr
-    step_size=args.step_size # LR decrease every 100 epochs
-    gamma=args.gamma # LR decrease factor
 
     lr = args.lr
     bs = args.batch_size
@@ -837,9 +906,6 @@ if __name__ == "__main__":
     coeff = args.coeff
 
     dropout = args.dropout
-
-    # print(f"lambda = {coeff}")
-    # print(f"dropout: {dropout}")
 
     checkpoint_dir = f"checkpoints_{name}"
     os.makedirs(checkpoint_dir, exist_ok=True)
@@ -860,7 +926,6 @@ if __name__ == "__main__":
     np.random.shuffle(indices)
     data = data[indices]
 
-
     ntrain = int(0.8 * len(data))
     data_train = data[:ntrain]
     data_val = data[ntrain:]
@@ -878,6 +943,19 @@ if __name__ == "__main__":
         low = torch.full((data.shape[1],), -3.0).to(device)
         high = torch.full((data.shape[1],), 3.0).to(device)
         source_dist = torch.distributions.Uniform(low, high)
+
+    torch.manual_seed(1)
+    n_eval_run_for_epoch = 20
+    n_samples_eval = 100000
+    x_init_eval_list = []
+
+    for _ in range(n_eval_run_for_epoch):
+        x_init_eval = source_dist.sample((n_samples_eval,))
+        if args.clamp:
+            x_init_eval = torch.clamp(x_init_eval, -3.0, 3.0)
+        x_init_eval_list.append(x_init_eval)
+    
+    T_eval = torch.linspace(0, 1, 100)
 
     # Initialize model, path, optimizer
     vf4 = MLP(
@@ -897,8 +975,8 @@ if __name__ == "__main__":
         # scheduler parameters
         scheduler = torch.optim.lr_scheduler.StepLR(
             optim4,
-            step_size=step_size,
-            gamma=gamma
+            step_size=args.step_size,
+            gamma=args.gamma
         )
     
     # print model parameters count
@@ -916,12 +994,26 @@ if __name__ == "__main__":
     ks_pval_val_hist = [[] for _ in range(data_train.shape[1])]
     ks_pval_train_hist = [[] for _ in range(data_train.shape[1])]
 
+    w_val_hist_std = [[] for _ in range(data_train.shape[1])]
+    w_train_hist_std = [[] for _ in range(data_train.shape[1])]
+    ks_stat_val_hist_std = [[] for _ in range(data_train.shape[1])]
+    ks_stat_train_hist_std = [[] for _ in range(data_train.shape[1])]
+    ks_pval_val_hist_std = [[] for _ in range(data_train.shape[1])]
+    ks_pval_train_hist_std = [[] for _ in range(data_train.shape[1])]
+
     w_val_hist_dphi = []
     w_train_hist_dphi = []
     ks_stat_val_hist_dphi = []
     ks_stat_train_hist_dphi = []
     ks_pval_val_hist_dphi = []
     ks_pval_train_hist_dphi = []
+
+    w_val_hist_dphi_std = []
+    w_train_hist_dphi_std = []
+    ks_stat_val_hist_dphi_std = []
+    ks_stat_train_hist_dphi_std = []
+    ks_pval_val_hist_dphi_std = []
+    ks_pval_train_hist_dphi_std = []
 
     eval_epochs = []
 
@@ -1086,10 +1178,6 @@ if __name__ == "__main__":
             vf4.load_state_dict(checkpoint['model_state_dict'])
             optim4.load_state_dict(checkpoint['optimizer_state_dict'])
             
-            # Override learning rate
-            for param_group in optim4.param_groups:
-                param_group['lr'] = args.lr
-            
             start_epoch = checkpoint['epoch'] + 1
             losses_train = checkpoint.get('loss_history_train', [])
             losses_val = checkpoint.get('loss_history_val', [])
@@ -1101,41 +1189,44 @@ if __name__ == "__main__":
             metrics_map = {
                 'w_history_train': w_train_hist,
                 'w_history_val': w_val_hist,
+                'w_history_train_std': w_train_hist_std,
+                'w_history_val_std': w_val_hist_std,
                 'ks_stat_history_train': ks_stat_train_hist,
                 'ks_stat_history_val': ks_stat_val_hist,
+                'ks_stat_history_train_std': ks_stat_train_hist_std,
+                'ks_stat_history_val_std': ks_stat_val_hist_std,
                 'ks_pvalue_history_train': ks_pval_train_hist,
-                'ks_pvalue_history_val': ks_pval_val_hist
+                'ks_pvalue_history_val': ks_pval_val_hist,
+                'ks_pvalue_history_train_std': ks_pval_train_hist_std,
+                'ks_pvalue_history_val_std': ks_pval_val_hist_std
             }
 
-            for key_new, target_list in metrics_map.items():
-                if key_new in checkpoint:
-                    temp_data = checkpoint[key_new]
-                    for i in range(min(len(temp_data), input_dim)):
-                        target_list[i] = temp_data[i]
-                else:
-                    for i in range(input_dim):
-                        legacy_key = f"{key_new}_{i}"
-                        if legacy_key in checkpoint:
-                            target_list[i] = checkpoint[legacy_key]
+            for key, local_list in metrics_map.items():
+                if key in checkpoint:
+                    data_from_cp = checkpoint[key]
+                    for i in range(min(len(data_from_cp), input_dim)):
+                        local_list[i] = data_from_cp[i]
             
-            # Wasserstein dphi
-            if 'w_history_val_dphi' in checkpoint:
-                w_val_hist_dphi = checkpoint['w_history_val_dphi']
-            if 'w_history_train_dphi' in checkpoint:
-                w_train_hist_dphi = checkpoint['w_history_train_dphi']
-            
-            # KS Statistic dphi
-            if 'ks_stat_history_val_dphi' in checkpoint:
-                ks_stat_val_hist_dphi = checkpoint['ks_stat_history_val_dphi']
-            if 'ks_stat_history_train_dphi' in checkpoint:
-                ks_stat_train_hist_dphi = checkpoint['ks_stat_history_train_dphi']
-            
-            # KS p-value dphi
-            if 'ks_pvalue_history_val_dphi' in checkpoint:
-                ks_pval_val_hist_dphi = checkpoint['ks_pvalue_history_val_dphi']
-            if 'ks_pvalue_history_train_dphi' in checkpoint:
-                ks_pval_train_hist_dphi = checkpoint['ks_pvalue_history_train_dphi']
-            
+            dphi_metrics = {
+                'w_history_train_dphi': w_train_hist_dphi,
+                'w_history_val_dphi': w_val_hist_dphi,
+                'w_history_train_dphi_std': w_train_hist_dphi_std,
+                'w_history_val_dphi_std': w_val_hist_dphi_std,
+                'ks_stat_history_train_dphi': ks_stat_train_hist_dphi,
+                'ks_stat_history_val_dphi': ks_stat_val_hist_dphi,
+                'ks_stat_history_train_dphi_std': ks_stat_train_hist_dphi_std,
+                'ks_stat_history_val_dphi_std': ks_stat_val_hist_dphi_std,
+                'ks_pvalue_history_train_dphi': ks_pval_train_hist_dphi,
+                'ks_pvalue_history_val_dphi': ks_pval_val_hist_dphi,
+                'ks_pvalue_history_train_dphi_std': ks_pval_train_hist_dphi_std,
+                'ks_pvalue_history_val_dphi_std': ks_pval_val_hist_dphi_std
+            }
+
+            for key, local_list in dphi_metrics.items():
+                if key in checkpoint:
+                    local_list.clear()
+                    local_list.extend(checkpoint[key])
+
             if 'best_eval_metric' in checkpoint:
                 best_eval_metric = checkpoint['best_eval_metric']
             
@@ -1265,95 +1356,137 @@ if __name__ == "__main__":
 
             # save checkpoint and evaluation plots
             if epoch > 0 and epoch % save_every == 0:
-                torch.manual_seed(1)
                 # Evaluation: Generate samples and compute metrics
                 print("-" * 100)
                 print(f"Epoch {epoch}: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                 vf4.eval()
                 with torch.no_grad():
-                    n_samples_eval = 100000 
-                    x_init_eval = source_dist.sample((n_samples_eval,)).to(device)
-                    if args.clamp:
-                        x_init_eval = torch.clamp(x_init_eval, -3.0, 3.0)
-                    
-                    wrapped_model_eval = WrappedModel(vf4)
-                    solver_eval = ODESolver(velocity_model=wrapped_model_eval)
-                
-                    T_eval = torch.linspace(0, 1, 100).to(device)
+                    run_w_val = [[] for _ in range(data_train.shape[1])]
+                    run_w_train = [[] for _ in range(data_train.shape[1])]
+                    run_ks_stat_val = [[] for _ in range(data_train.shape[1])]
+                    run_ks_stat_train = [[] for _ in range(data_train.shape[1])]
+                    run_ks_pval_val = [[] for _ in range(data_train.shape[1])]
+                    run_ks_pval_train = [[] for _ in range(data_train.shape[1])]
 
-                    sol_eval = solver_eval.sample(
-                        time_grid=T_eval,
-                        x_init=x_init_eval,
-                        step_size=None,
-                        method='dopri5',
-                        return_intermediates=True,
-                        atol = 1e-5,
-                        rtol = 1e-5
+                    run_w_val_dphi = []
+                    run_w_train_dphi = []
+                    run_ks_stat_val_dphi = []
+                    run_ks_stat_train_dphi = []
+                    run_ks_pval_val_dphi = []
+                    run_ks_pval_train_dphi = []
+
+                    for jj in range(n_eval_run_for_epoch):
+                        wrapped_model_eval = WrappedModel(vf4)
+                        solver_eval = ODESolver(velocity_model=wrapped_model_eval)
+
+                        x_init_run = x_init_eval_list[jj]
+
+                        sol_eval = solver_eval.sample(
+                            time_grid=T_eval.to(device),
+                            x_init=x_init_run.to(device),
+                            step_size=None,
+                            method='dopri5',
+                            return_intermediates=True,
+                            atol = 1e-5,
+                            rtol = 1e-5
+                            )
+
+                        sol = sol_eval.cpu().numpy()
+                        final_pos = sol[-1] # For metric computation I need only solver at final time   
+
+                        # Compute wasserstein distance and KS statistic for each features (for needed for this)
+                        for i in range(data_train.shape[1]):
+                            # Wasserstein
+                            w_train_run = stats.wasserstein_distance(data_train[:, i], final_pos[:, i])
+                            w_val_run = stats.wasserstein_distance(data_val[:, i], final_pos[:, i])
+                            
+                            # Kolmogorov-Smirnov
+                            ks_s_t_run, ks_p_t_run = stats.ks_2samp(data_train[:, i], final_pos[:, i])
+                            ks_s_v_run, ks_p_v_run = stats.ks_2samp(data_val[:, i], final_pos[:, i])
+
+                            run_w_train[i].append(w_train_run)
+                            run_w_val[i].append(w_val_run)
+                            run_ks_stat_train[i].append(ks_s_t_run)
+                            run_ks_pval_train[i].append(ks_p_t_run)
+                            run_ks_stat_val[i].append(ks_s_v_run)
+                            run_ks_pval_val[i].append(ks_p_v_run)
+
+                        # Compute dphi metrics
+                        dphi_data_train = compute_dphi_from_pxpy(
+                            data_train[:, 0],
+                            data_train[:, 1],
+                            data_train[:, 2],
+                            data_train[:, 3]
                         )
+                        dphi_data_val = compute_dphi_from_pxpy(
+                            data_val[:, 0],
+                            data_val[:, 1],
+                            data_val[:, 2],
+                            data_val[:, 3]
+                        )
+                        dphi_gen = compute_dphi_from_pxpy(
+                            final_pos[:, 0],
+                            final_pos[:, 1],
+                            final_pos[:, 2],
+                            final_pos[:, 3]
+                        )
+                        # dphi_data_train = compute_dphi(data_train[:, 0], data_train[:, 1])
+                        # dphi_data_val = compute_dphi(data_val[:, 0], data_val[:, 1])
+                        # dphi_gen = compute_dphi(final_pos[:, 0], final_pos[:, 1])
 
-                    sol = sol_eval.cpu().numpy()
-                    final_pos = sol[-1] # For metric computation I need only solver at final time   
+                        # metrics for dphi
+                        w_dphi_train_run = stats.wasserstein_distance(dphi_data_train, dphi_gen)
+                        ks_s_dphi_train_run, ks_p_dphi_train_run = stats.ks_2samp(dphi_data_train, dphi_gen)
 
-                    # Compute wasserstein distance and KS statistic
+                        w_dphi_val_run = stats.wasserstein_distance(dphi_data_val, dphi_gen)
+                        ks_s_dphi_val_run, ks_p_dphi_val_run = stats.ks_2samp(dphi_data_val, dphi_gen)
+
+                        run_w_val_dphi.append(w_dphi_val_run)
+                        run_w_train_dphi.append(w_dphi_train_run)
+                        run_ks_stat_val_dphi.append(ks_s_dphi_val_run)
+                        run_ks_stat_train_dphi.append(ks_s_dphi_train_run)
+                        run_ks_pval_val_dphi.append(ks_p_dphi_val_run)
+                        run_ks_pval_train_dphi.append(ks_p_dphi_train_run)
+
+                    ##########################################
+                    # Qui devo calcolare le medie e metterle in quelle liste li, devo anche fare le liste per gli rms
+                    ##########################################
                     for i in range(data_train.shape[1]):
-                        # Wasserstein
-                        w_train = stats.wasserstein_distance(data_train[:, i], final_pos[:, i])
-                        w_val   = stats.wasserstein_distance(data_val[:, i], final_pos[:, i])
-                        
-                        w_train_hist[i].append(w_train)
-                        w_val_hist[i].append(w_val)
-                        
-                        # Kolmogorov-Smirnov (Training)
-                        ks_s_t, ks_p_t = stats.ks_2samp(data_train[:, i], final_pos[:, i])
-                        ks_stat_train_hist[i].append(ks_s_t)
-                        ks_pval_train_hist[i].append(ks_p_t)
-                        
-                        # Kolmogorov-Smirnov (Validation)
-                        ks_s_v, ks_p_v = stats.ks_2samp(data_val[:, i], final_pos[:, i])
-                        ks_stat_val_hist[i].append(ks_s_v)
-                        ks_pval_val_hist[i].append(ks_p_v)
-                    
-                    # Compute dphi metrics
-                    dphi_data_train = compute_dphi_from_pxpy(
-                        data_train[:, 0],
-                        data_train[:, 1],
-                        data_train[:, 2],
-                        data_train[:, 3]
-                    )
-                    dphi_data_val = compute_dphi_from_pxpy(
-                        data_val[:, 0],
-                        data_val[:, 1],
-                        data_val[:, 2],
-                        data_val[:, 3]
-                    )
-                    dphi_gen = compute_dphi_from_pxpy(
-                        final_pos[:, 0],
-                        final_pos[:, 1],
-                        final_pos[:, 2],
-                        final_pos[:, 3]
-                    )
-                    # dphi_data_train = compute_dphi(data_train[:, 0], data_train[:, 1])
-                    # dphi_data_val = compute_dphi(data_val[:, 0], data_val[:, 1])
-                    # dphi_gen = compute_dphi(final_pos[:, 0], final_pos[:, 1])
 
-                    # metrics for dphi
-                    w_dphi_train = stats.wasserstein_distance(dphi_data_train, dphi_gen)
-                    ks_s_dphi_train, ks_p_dphi_train = stats.ks_2samp(dphi_data_train, dphi_gen)
+                        w_train_hist[i].append(np.mean(run_w_train[i]))
+                        w_train_hist_std[i].append(np.std(run_w_train[i]))
+                        w_val_hist[i].append(np.mean(run_w_val[i]))
+                        w_val_hist_std[i].append(np.std(run_w_val[i]))
 
-                    w_dphi_val = stats.wasserstein_distance(dphi_data_val, dphi_gen)
-                    ks_s_dphi_val, ks_p_dphi_val = stats.ks_2samp(dphi_data_val, dphi_gen)
+                        ks_stat_train_hist[i].append(np.mean(run_ks_stat_train[i]))
+                        ks_stat_train_hist_std[i].append(np.std(run_ks_stat_train[i]))
+                        ks_stat_val_hist[i].append(np.mean(run_ks_stat_val[i]))
+                        ks_stat_val_hist_std[i].append(np.std(run_ks_stat_val[i]))
 
-                    w_val_hist_dphi.append(w_dphi_val)
-                    w_train_hist_dphi.append(w_dphi_train)
-                    ks_stat_val_hist_dphi.append(ks_s_dphi_val)
-                    ks_stat_train_hist_dphi.append(ks_s_dphi_train)
-                    ks_pval_val_hist_dphi.append(ks_p_dphi_val)
-                    ks_pval_train_hist_dphi.append(ks_p_dphi_train)
+                        ks_pval_train_hist[i].append(np.mean(run_ks_pval_train[i]))
+                        ks_pval_train_hist_std[i].append(np.std(run_ks_pval_train[i]))
+                        ks_pval_val_hist[i].append(np.mean(run_ks_pval_val[i]))
+                        ks_pval_val_hist_std[i].append(np.std(run_ks_pval_val[i]))
+
+                    w_val_hist_dphi.append(np.mean(run_w_val_dphi))
+                    w_val_hist_dphi_std.append(np.std(run_w_val_dphi))
+                    w_train_hist_dphi.append(np.mean(run_w_train_dphi))
+                    w_train_hist_dphi_std.append(np.std(run_w_train_dphi))
+
+                    ks_stat_val_hist_dphi.append(np.mean(run_ks_stat_val_dphi))
+                    ks_stat_val_hist_dphi_std.append(np.std(run_ks_stat_val_dphi))
+                    ks_stat_train_hist_dphi.append(np.mean(run_ks_stat_train_dphi))
+                    ks_stat_train_hist_dphi_std.append(np.std(run_ks_stat_train_dphi))
+
+                    ks_pval_val_hist_dphi.append(np.mean(run_ks_pval_val_dphi))
+                    ks_pval_val_hist_dphi_std.append(np.std(run_ks_pval_val_dphi))
+                    ks_pval_train_hist_dphi.append(np.mean(run_ks_pval_train_dphi))
+                    ks_pval_train_hist_dphi_std.append(np.std(run_ks_pval_train_dphi))
 
                     eval_epochs.append(epoch)
 
-                    if w_dphi_val < best_eval_metric:
-                        best_eval_metric = w_dphi_val
+                    if w_val_hist_dphi[-1] < best_eval_metric:
+                        best_eval_metric = w_val_hist_dphi[-1]
                         patience_counter = 0
                         best_model_path = os.path.join(checkpoint_dir, f'epoch_{epoch}', f'model_epoch_{epoch}.pth')
                         print(best_model_path)
@@ -1411,6 +1544,18 @@ if __name__ == "__main__":
                     'ks_stat_history_val_dphi': ks_stat_val_hist_dphi,
                     'ks_pvalue_history_train_dphi': ks_pval_train_hist_dphi,
                     'ks_pvalue_history_val_dphi': ks_pval_val_hist_dphi,
+                    'w_history_train_std': w_train_hist_std,
+                    'w_history_val_std': w_val_hist_std,
+                    'ks_stat_history_train_std': ks_stat_train_hist_std,
+                    'ks_stat_history_val_std': ks_stat_val_hist_std,
+                    'ks_pvalue_history_train_std': ks_pval_train_hist_std,
+                    'ks_pvalue_history_val_std': ks_pval_val_hist_std,
+                    'w_history_train_dphi_std': w_train_hist_dphi_std,
+                    'w_history_val_dphi_std': w_val_hist_dphi_std,
+                    'ks_stat_history_train_dphi_std': ks_stat_train_hist_dphi_std,
+                    'ks_stat_history_val_dphi_std': ks_stat_val_hist_dphi_std,
+                    'ks_pvalue_history_train_dphi_std': ks_pval_train_hist_dphi_std,
+                    'ks_pvalue_history_val_dphi_std': ks_pval_val_hist_dphi_std,
                     'eval_epochs': eval_epochs,
                     'best_eval_metric': best_eval_metric,
                     'patience': patience_counter,
@@ -1457,11 +1602,17 @@ if __name__ == "__main__":
                         epoch,
                         eval_epochs,
                         w_val_hist[i],
+                        w_val_hist_std[i],
                         w_train_hist[i],
+                        w_train_hist_std[i],
                         ks_stat_val_hist[i],
+                        ks_stat_val_hist_std[i],
                         ks_stat_train_hist[i],
+                        ks_stat_train_hist_std[i],
                         ks_pval_val_hist[i],
+                        ks_pval_val_hist_std[i],
                         ks_pval_train_hist[i],
+                        ks_pval_train_hist_std[i],
                         losses_train,
                         losses_val,
                         checkpoint_dir,
@@ -1471,11 +1622,17 @@ if __name__ == "__main__":
                     epoch,
                     eval_epochs,
                     w_val_hist_dphi,
+                    w_val_hist_dphi_std,
                     w_train_hist_dphi,
+                    w_train_hist_dphi_std,
                     ks_stat_val_hist_dphi,
+                    ks_stat_val_hist_dphi_std,
                     ks_stat_train_hist_dphi,
+                    ks_stat_train_hist_dphi_std,
                     ks_pval_val_hist_dphi,
+                    ks_pval_val_hist_dphi_std,
                     ks_pval_train_hist_dphi,
+                    ks_pval_train_hist_dphi_std,
                     losses_train,
                     losses_val,
                     checkpoint_dir,
