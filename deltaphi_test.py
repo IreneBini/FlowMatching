@@ -890,6 +890,13 @@ if __name__ == "__main__":
         help="Dropout value"
     )
 
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=10,
+        help=""
+    )
+
     args = parser.parse_args()
 
     name = args.name
@@ -1019,8 +1026,7 @@ if __name__ == "__main__":
 
     best_eval_metric = float('inf')
     patience_counter = 0
-    custom_patience = 10
-    lr_reduction_factor = 0.5
+    custom_patience = args.patience
 
     if args.eval_only:
         print("EVALUATION ONLY MODE")
@@ -1497,7 +1503,7 @@ if __name__ == "__main__":
 
                     if patience_counter >= custom_patience:
                         old_lr = optim4.param_groups[0]["lr"]
-                        new_lr = old_lr * lr_reduction_factor
+                        new_lr = old_lr * args.gamma
 
                         checkpoint = torch.load(best_model_path, map_location=device, weights_only=False)
 
