@@ -55,6 +55,7 @@ from flow_matching.solver import ODESolver
 from flow_matching.utils import ModelWrapper
 from scipy import stats
 from torch import nn, Tensor
+from torchcfm.optimal_transport import OTPlanSampler
 
 # Activation class
 class Swish(nn.Module):
@@ -143,132 +144,6 @@ def print_gpu_memory(epoch=None, step=None):
 def get_elapsed_time(start_time):
     elapsed = time.time() - start_time
     return str(datetime.timedelta(seconds=int(elapsed)))
-
-# def save_evaluation_plots(
-#         epoch,
-#         sol,
-#         T,
-#         target_data,
-#         base_dir,
-#         dim_index=0,
-#         variable_name='dphi'
-#     ):
-#     """Saves comparison plots for a specific epoch.
-#     Args:
-#         epoch (int): Current epoch number.
-#         sol (np.ndarray): Solution array from the ODE solver.
-#         T (torch.Tensor): Time grid used in the solver.
-#         target_data (np.ndarray): Target distribution data.
-#         base_dir (str): Base directory to save plots.
-#     """
-#     epoch_dir = os.path.join(base_dir, f"epoch_{epoch}")
-#     os.makedirs(epoch_dir, exist_ok=True)
-
-#     data = target_data[:, dim_index]
-#     sol = sol[:, :, dim_index]
-
-#     final_positions = sol[-1, :]
-
-#     # Plot 1: Temporal Evolution
-#     fig, axes = plt.subplots(2, 5, figsize=(20, 8))
-#     axes = axes.flatten()
-#     indices = np.linspace(0, len(T)-1, 10, dtype=int)
-#     for idx, t_idx in enumerate(indices):
-#         axes[idx].hist(
-#             sol[t_idx],
-#             bins=100,
-#             density=True,
-#             alpha=0.7,
-#             color='cyan'
-#         )
-#         axes[idx].set_title(f't = {T[t_idx].item():.2f}')
-#         axes[idx].set_xlabel(variable_name)
-#         axes[idx].set_ylabel('Density')
-#         axes[idx].grid(alpha=0.3)
-#         axes[idx].set_xlim(data.min() - 0.5, data.max() + 0.5)
-#     plt.suptitle('Distribution Evolution', fontsize=14, y=1.00)
-#     plt.tight_layout()
-#     plt.savefig(os.path.join(epoch_dir, variable_name + '_distribution_evolution.png'))
-#     plt.close()
-
-#     # Plot 2: Final Comparison
-#     plt.figure(figsize=(8, 5))
-#     plt.hist(
-#         data,
-#         bins=50,
-#         density=True,
-#         alpha=0.5,
-#         color='red',
-#         label='Target'
-#     )
-#     plt.hist(
-#         final_positions,
-#         bins=50,
-#         density=True,
-#         alpha=0.7,
-#         color='cyan',
-#         label='Generated'
-#     )
-#     plt.xlabel(variable_name, fontsize=12)
-#     plt.ylabel('Density', fontsize=12)
-#     plt.xlim(data.min() - 0.5, data.max() + 0.5)
-#     plt.legend()
-#     plt.grid(alpha=0.3)
-#     plt.title(f'Comparison at Epoch {epoch}', fontsize=12)
-#     plt.savefig(os.path.join(epoch_dir, variable_name + '_final_comparison.png'), dpi=200)
-#     plt.close()
-
-# def correlation_plot_2d(
-#     epoch,
-#     target_data,
-#     sol,
-#     base_dir,
-#     variable_names=('phi1', 'phi2'),
-#     index = (0, 1)
-# ):
-#     """Plots the 2D correlation between the two variables for target and generated data.
-#     """
-#     epoch_dir = os.path.join(base_dir, f"epoch_{epoch}")
-#     os.makedirs(epoch_dir, exist_ok=True)
-
-#     gen_final = sol[-1]
-
-#     plt.figure(figsize=(12, 5))
-
-#     # Target Data
-#     plt.subplot(1, 2, 1)
-#     plt.hist2d(
-#         target_data[:, index[0]],
-#         target_data[:, index[1]],
-#         bins=50,
-#         density=True,
-#         cmap='Reds'
-#     )
-#     plt.colorbar(label='Density')
-#     plt.xlabel(variable_names[0], fontsize=12)
-#     plt.ylabel(variable_names[1], fontsize=12)
-#     plt.title('Target Data Correlation', fontsize=14)
-#     plt.grid(alpha=0.3)
-
-#     # Generated Data
-#     plt.subplot(1, 2, 2)
-#     plt.hist2d(
-#         gen_final[:, index[0]],
-#         gen_final[:, index[1]],
-#         bins=50,
-#         density=True,
-#         cmap='Blues'
-#     )
-#     plt.colorbar(label='Density')
-#     plt.xlabel(variable_names[0], fontsize=12)
-#     plt.ylabel(variable_names[1], fontsize=12)
-#     plt.title('Generated Data Correlation', fontsize=14)
-#     plt.grid(alpha=0.3)
-
-#     plt.suptitle(f'Correlation Comparison at Epoch {epoch}', fontsize=16)
-#     plt.tight_layout()
-#     plt.savefig(os.path.join(epoch_dir, variable_names[0] + '_' + variable_names[1] + '_correlation.png'), dpi=200)
-#     plt.close()
 
 def compute_dphi_from_pxpy(
     px1,
@@ -546,7 +421,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=20480,
+        default=512,
         help="Batch size for first 2 epochs of training"
     )
     parser.add_argument(
@@ -583,7 +458,7 @@ if __name__ == "__main__":
         "--coeff",
         type=float,
         default=1.0,
-        help=""
+        help="Coefficient for the cosine similarity loss when --cosine_similarity_loss is set"
     )
 
     parser.add_argument(
@@ -597,7 +472,13 @@ if __name__ == "__main__":
         "--patience",
         type=int,
         default=10,
-        help=""
+        help="Number of epochs to wait for improvement before early stopping"
+    )
+
+    parser.add_argument(
+        "--use_minibatch_ot",
+        action="store_true",
+        help="If set, uses minibatch optimal transport to align samples in each batch during training"
     )
 
     args = parser.parse_args()
@@ -621,7 +502,10 @@ if __name__ == "__main__":
     os.makedirs(checkpoint_dir, exist_ok=True)
 
     # Load dataset
-    realistic_dataset = np.load("pxpy.npy")
+    realistic_dataset = np.load("pxpy_big.npy")
+
+    print(f"shape data: {realistic_dataset.shape}")
+
     data = realistic_dataset[:, 2:6] # px1, py1, px2, py2
 
     # print(f"shape data: {data.shape}")
@@ -638,13 +522,11 @@ if __name__ == "__main__":
     train_raw = data[:ntrain]
     val_raw = data[ntrain:]
 
-    # --- Normalizzazione (Standardizzazione) ---
-    # Calcola media e std SOLO sul TRAIN
+    # Standardization
+    # Compute mean and std from train data only and apply to both train and val data
     mean_train = train_raw.mean(axis=0)
     std_train = train_raw.std(axis=0)
 
-    # Applica la trasformazione a entrambi
-    # (il validation usa le statistiche del train!)
     data_train = (train_raw - mean_train) / std_train
     data_val = (val_raw - mean_train) / std_train
 
@@ -676,7 +558,7 @@ if __name__ == "__main__":
         source_dist = torch.distributions.Uniform(low, high)
 
     torch.manual_seed(1)
-    n_eval_run_for_epoch = 3
+    n_eval_run_for_epoch = 10
     n_samples_eval = 50000
     x_init_eval_list = []
 
@@ -687,7 +569,7 @@ if __name__ == "__main__":
             x_init_eval = torch.clamp(x_init_eval, -3.0, 3.0)
         x_init_eval_list.append(x_init_eval)
     
-    T_eval = torch.linspace(0, 1, 1000)
+    T_eval = torch.linspace(0, 1, 100)
 
     # Initialize model, path, optimizer
     vf4 = MLP(
@@ -930,7 +812,7 @@ if __name__ == "__main__":
             bs, 
             lr,
             start_epoch,
-            "pxpy.npy",
+            "pxpy_big.npy",
             "px1, py1, px2, py2"
         )
 
@@ -948,6 +830,9 @@ if __name__ == "__main__":
             batch_size=bs,
             shuffle=True
         )
+
+        ot_sampler = OTPlanSampler(method="exact")
+
         print(f"Start training: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         for epoch in range(start_epoch, epochs):
             vf4.train()
@@ -967,6 +852,17 @@ if __name__ == "__main__":
                 x_0 = source_dist.sample((batch_curr,)).to(device) # ho tolto un unsqueeze(1) per avere shape (batch_curr, 2)
                 if args.clamp == True:
                     x_0 = torch.clamp(x_0, -3.0, 3.0) # Clamp for uniform distribution
+
+                if args.use_minibatch_ot:
+                    # Compute optimal transport map between x_0 and x_1
+                    pi = ot_sampler.get_map(x_0, x_1)
+                    
+                    # Obtain indices for aligned samples
+                    indices_i, indices_j = ot_sampler.sample_map(pi, batch_size=batch_curr)
+                    
+                    # Reorder x_0 and x_1 according to OT map
+                    x_0 = x_0[indices_i]
+                    x_1 = x_1[indices_j]
 
                 t = torch.rand(batch_curr, 1).to(device) # Uniform(0, 1) times
                 
@@ -1021,7 +917,7 @@ if __name__ == "__main__":
                 scheduler.step() # scheduler step at the end of the epoch
             
             # compute wasserstein distance for phi every 10 epoch
-            if epoch > 0 and epoch % (save_every/2) == 0:
+            if epoch > 0 and epoch % (save_every/10) == 0:
                 print("-" * 100)
                 print(f"Epoch {epoch}, evaluation dphi wasserstein: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
                 
